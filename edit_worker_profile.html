@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Edit Worker Profile</title>
+    <style>
+        .skill-group {
+            margin-bottom: 10px;
+        }
+        .delete-btn {
+            color: red;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+        }
+        .delete-btn:hover {
+            text-decoration: underline;
+        }
+        .profile-photo {
+            width: 150px;
+            height: 150px;
+            border-radius: 50%;
+            object-fit: cover;
+            cursor: pointer;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h2>Edit Worker Profile</h2>
+
+    <!-- Profile Photo Section -->
+    <div>
+        <label for="photo">
+            <img src="{{ url_for('static', filename='uploads/' + profile.photo) if profile.photo else url_for('static', filename='default-profile.jpg') }}"
+                 class="profile-photo"
+                 id="photo-preview"
+                 alt="Profile Photo">
+        </label>
+    </div>
+
+    <form method="POST" enctype="multipart/form-data">
+        <!-- Photo Upload -->
+        <input type="file" id="photo" name="photo" accept="image/*" class="hidden" onchange="previewImage(event)"><br><br>
+
+        Age: <input type="number" name="age" value="{{ profile.age }}" required><br>
+        Contact: <input type="number" name="phone" value="{{ profile.phone }}" required><br>
+
+        Gender:
+        <select name="gender" required>
+            <option value="Male" {% if profile.gender == 'Male' %}selected{% endif %}>Male</option>
+            <option value="Female" {% if profile.gender == 'Female' %}selected{% endif %}>Female</option>
+        </select><br>
+
+        Qualification: <input type="text" name="qualification" value="{{ profile.qualification }}" required><br>
+        Experience: <input type="text" name="experience" value="{{ profile.experience }}" required><br>
+        About Me: <textarea name="about" required>{{ profile.about }}</textarea><br>
+
+        <h3>Location</h3>
+        Locality: <input type="text" name="locality" value="{{ profile.locality }}" required><br>
+        City: <input type="text" name="city" value="{{ profile.city }}" required><br>
+        State: <input type="text" name="state" value="{{ profile.state }}" required><br>
+        Zipcode: <input type="text" name="zipcode" value="{{ profile.zipcode }}" required><br><br>
+
+        <h3>Skills</h3>
+        <div id="skills-section">
+            {% for skill in skills %}
+                <div class="skill-group">
+                    <input type="text" name="skills" value="{{ skill.name }}" required>
+                    <input type="number" name="rates" value="{{ skill.rate }}" required>
+                    <button type="button" onclick="removeSkill(this)">Remove</button>
+                </div>
+            {% endfor %}
+        </div>
+        <button type="button" onclick="addSkill()">Add Another Skill</button><br><br>
+
+        <h3>Upload Media</h3>
+        Showcase Images: <input type="file" name="showcase_images" accept="image/*" multiple><br><br>
+        Profile Video: <input type="file" name="video" accept="video/*"><br>
+
+        <br><br>
+        <input type="submit" value="Update Profile">
+    </form>
+
+    <!-- Current Video Section -->
+    {% if profile.video %}
+        <p>Current Video:</p>
+        <video width="300" controls>
+            <source src="{{ url_for('static', filename='uploads/' + profile.video) }}">
+        </video><br>
+        <!-- Delete Video Form -->
+        <form method="POST" action="{{ url_for('delete_media', media_type='video', media_id=profile.id) }}" style="display:inline;">
+            <button type="submit" class="delete-btn">Delete Video</button>
+        </form><br>
+    {% endif %}
+
+    <!-- Current Showcase Images Section -->
+    {% if showcase_images %}
+        <p>Current Showcase Images:</p>
+        {% for img in showcase_images %}
+            <img src="{{ url_for('static', filename='uploads/' + img.image_url) }}" width="100" style="margin: 5px;">
+            <!-- Delete Image Form -->
+            <form method="POST" action="{{ url_for('delete_media', media_type='image', media_id=img.id) }}" style="display:inline;">
+                <button type="submit" class="delete-btn">Delete Image</button>
+            </form><br>
+        {% endfor %}
+    {% endif %}
+
+    <script>
+        function addSkill() {
+            const container = document.getElementById('skills-section');
+            const skillHTML = `
+                <div class="skill-group">
+                    <input type="text" name="skills" placeholder="Skill (e.g., plumber)" required>
+                    <input type="number" name="rates" placeholder="Rate per hour (₹)" required>
+                    <button type="button" onclick="removeSkill(this)">Remove</button>
+                </div>
+            `;
+            container.insertAdjacentHTML('beforeend', skillHTML);
+        }
+
+        function removeSkill(button) {
+            button.parentElement.remove();
+        }
+    </script>
+</body>
+</html>

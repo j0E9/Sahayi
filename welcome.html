@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Welcome</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      position: relative;
+    }
+
+    /* Always stick to top-left and top-right */
+    .location-box, .notification-icon {
+      position: fixed;
+      z-index: 1000;
+    }
+
+    .location-box {
+      top: 10px;
+      left: 10px;
+      background-color: #d7f0e3;
+      padding: 8px 12px;
+      border-radius: 12px;
+      font-size: 14px;
+      box-shadow: 0 0 5px rgba(0,0,0,0.2);
+      max-width: 80vw;
+      word-wrap: break-word;
+    }
+
+    .notification-icon {
+      top: 10px;
+      right: 10px;
+      font-size: 18px;
+      text-decoration: none;
+      color: black;
+      background-color: #f0f0f0;
+      padding: 8px 12px;
+      border-radius: 20px;
+      box-shadow: 0 0 5px rgba(0,0,0,0.2);
+    }
+
+    .container {
+      margin-top: 100px;
+      text-align: center;
+      padding: 0 15px;
+    }
+
+    a {
+      display: inline-block;
+      margin: 10px;
+      font-size: 16px;
+      text-decoration: none;
+      color: #0077cc;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    @media (max-width: 768px) {
+      .location-box, .notification-icon {
+        font-size: 13px;
+        padding: 6px 10px;
+      }
+    }
+  </style>
+
+  <script>
+    async function fetchLocationAndUpdate() {
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(async function (position) {
+          const latitude = position.coords.latitude;
+          const longitude = position.coords.longitude;
+
+          localStorage.setItem('lastLatitude', latitude);
+          localStorage.setItem('lastLongitude', longitude);
+
+          const locationDetails = await fetch('/get_location_details', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ latitude, longitude })
+          }).then(res => res.json());
+
+          localStorage.setItem('lastState', locationDetails.state);
+          localStorage.setItem('lastZipcode', locationDetails.zipcode);
+
+          document.getElementById("location-display").textContent =
+            `${locationDetails.state}, ${locationDetails.zipcode}`;
+
+          await fetch('/update_location', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              latitude: latitude,
+              longitude: longitude,
+              state: locationDetails.state,
+              zipcode: locationDetails.zipcode
+            })
+          });
+
+        }, function (error) {
+          console.error("Location error:", error);
+          restoreLastLocation();
+        });
+      } else {
+        console.log("Geolocation not supported.");
+        restoreLastLocation();
+      }
+    }
+
+    function restoreLastLocation() {
+      const state = localStorage.getItem('lastState') || 'Unknown';
+      const zipcode = localStorage.getItem('lastZipcode') || 'Unknown';
+      document.getElementById("location-display").textContent = `${state}, ${zipcode}`;
+    }
+
+    setInterval(fetchLocationAndUpdate, 10000);
+    window.onload = function () {
+      restoreLastLocation();
+      fetchLocationAndUpdate();
+    };
+  </script>
+</head>
+<body>
+  <div class="location-box">
+    📍 <b>Current Location:</b> <span id="location-display">Fetching...</span>
+  </div>
+
+  <a href="/notifications" class="notification-icon">🔔 {{ unread_count }}</a>
+
+  <div class="container">
+    <h2>Welcome {{ current_user.name }}</h2>
+    <p>Welcome to Job Connect! Your location updates every 10 seconds.</p>
+    <a href='/provide_job'>Provide Job</a><br>
+    <a href='/seek_job'>Seek Job</a><br>
+    <a href='/logout'>Logout</a>
+  </div>
+</body>
+</html>
