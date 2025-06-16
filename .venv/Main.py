@@ -1,6 +1,7 @@
-from flask import Flask, request, redirect, url_for, render_template_string, session, flash,render_template
+from flask import Flask, request, redirect, url_for, render_template_string, session, flash,render_template,jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user, UserMixin
+from geopy.distance import geodesic
 import os
 import random
 from datetime import datetime
@@ -11,8 +12,10 @@ from werkzeug.utils import secure_filename
 app = Flask(__name__)
 app.secret_key = 'AJDB775DA@#$TBhsYT@#&^FVDAD^&2'
 
+
 basedir = os.path.abspath(os.path.dirname(__file__))
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///jobconnect.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{os.path.join(basedir, 'jobconnect.db')}"
+
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 UPLOAD_FOLDER = 'static/uploads'
@@ -39,10 +42,10 @@ class User(UserMixin, db.Model):
     contact = db.Column(db.String(100), default='Not Provided')  # optional
     about = db.Column(db.String(500))
     skills = db.relationship('Skill', backref='user', lazy=True)
-    city = db.Column(db.String(100))
+    latitude = db.Column(db.Float)
+    longitude = db.Column(db.Float)
     state = db.Column(db.String(100))
     zipcode = db.Column(db.String(20))
-    locality = db.Column(db.String(100))
     phone = db.Column(db.String(20))
     # Define the one-to-one relationship with WorkerProfile
     worker_profile = db.relationship('WorkerProfile', backref='user', uselist=False)
@@ -85,8 +88,8 @@ class WorkerProfile(db.Model):
     qualification = db.Column(db.String(100))
     experience = db.Column(db.String(100))
     about = db.Column(db.Text)
-    locality = db.Column(db.String(100))
-    city = db.Column(db.String(100))
+    latitude = db.Column(db.Float)
+    longitude = db.Column(db.Float)
     state = db.Column(db.String(100))
     zipcode = db.Column(db.String(20))
     photo = db.Column(db.String(200))  # File path to image
@@ -94,6 +97,7 @@ class WorkerProfile(db.Model):
     photo = db.Column(db.String(200))   # store filename (e.g., "1_profile.jpg")
     video = db.Column(db.String(200))   # optional, for future use
     phone = db.Column(db.String(20))
+
 
 class Booking(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -163,14 +167,88 @@ def reverse_geocode(lat, lon):
         return 'Unknown'
 
 # ------------------ Routes ------------------
-
 @app.route('/')
 def home():
     if current_user.is_authenticated:
         return redirect(url_for('welcome'))
+
     return '''
-        <h2>Welcome to Job Connect</h2>
-        <a href='/login'>Login</a> | <a href='/sign_up'>Sign Up</a>
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <title>Job Connect</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+        <style>
+            body {
+                margin: 0;
+                padding: 0;
+                min-height: 100vh;
+                background: linear-gradient(135deg, #6e8efb, #a777e3);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-family: 'Segoe UI', sans-serif;
+                animation: fadeIn 1s ease-in;
+            }
+
+            @keyframes fadeIn {
+                from { opacity: 0; transform: translateY(20px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+
+            .card {
+                background: rgba(255, 255, 255, 0.95);
+                border-radius: 20px;
+                padding: 40px 30px;
+                max-width: 420px;
+                width: 100%;
+                box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+                text-align: center;
+            }
+
+            .card h2 {
+                font-size: 28px;
+                font-weight: bold;
+                margin-bottom: 20px;
+            }
+
+            .card h2 span {
+                color: #6f42c1;
+            }
+
+            .btn-lg {
+                padding: 12px 20px;
+                font-size: 18px;
+                border-radius: 10px;
+                margin-top: 15px;
+            }
+
+            .btn i {
+                margin-right: 8px;
+            }
+
+            .btn-outline-primary:hover {
+                background-color: #6f42c1;
+                color: #fff;
+                border-color: #6f42c1;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h2>Welcome to <span>Sahayi</span></h2>
+            <p class="text-muted mb-4">Find jobs. Offer skills. Build your future.</p>
+            <a href="/login" class="btn btn-primary btn-lg w-100">
+                <i class="fas fa-sign-in-alt"></i> Login
+            </a>
+            <a href="/sign_up" class="btn btn-outline-primary btn-lg w-100">
+                <i class="fas fa-user-plus"></i> Sign Up
+            </a>
+        </div>
+    </body>
+    </html>
     '''
 
 
@@ -187,15 +265,104 @@ def login():
             flash("No account found with this email. Please sign up.")
             return redirect(url_for('sign_up'))
 
-    # Return a plain HTML form for login
     return '''
-        <h2>Login</h2>
-        <form method='POST'>
-            Email: <input type='email' name='email' required><br>
-            <input type='submit' value='Login'>
-        </form>
-        <p>Don't have an account? <a href='/sign_up'>Sign Up</a></p>
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <title>Login - Job Connect</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+        <style>
+            body {
+                margin: 0;
+                padding: 0;
+                height: 100vh;
+                background: linear-gradient(135deg, #6e8efb, #a777e3);
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                font-family: 'Segoe UI', sans-serif;
+                animation: fadeIn 1s ease-in;
+            }
+
+            @keyframes fadeIn {
+                from { opacity: 0; transform: translateY(20px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+
+            .login-box {
+                background: rgba(255, 255, 255, 0.95);
+                padding: 40px 30px;
+                border-radius: 20px;
+                box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+                width: 100%;
+                max-width: 420px;
+                text-align: center;
+            }
+
+            .login-box h2 {
+                font-weight: 700;
+                font-size: 26px;
+                margin-bottom: 25px;
+            }
+
+            .form-label {
+                font-weight: 500;
+            }
+
+            .form-control {
+                padding-left: 40px;
+                border-radius: 10px;
+            }
+
+            .input-group-text {
+                background-color: #e9ecef;
+                border-radius: 10px 0 0 10px;
+                border: none;
+            }
+
+            .btn-primary {
+                padding: 12px;
+                font-size: 18px;
+                border-radius: 10px;
+                font-weight: 500;
+            }
+
+            .btn-primary:hover {
+                background-color: #5936b4;
+                border-color: #5936b4;
+            }
+
+            .text-muted a {
+                color: #6f42c1;
+                text-decoration: none;
+            }
+
+            .text-muted a:hover {
+                text-decoration: underline;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="login-box">
+            <h2>Login to <span class="text-primary">Sahayi</span></h2>
+            <form method="POST">
+                <div class="mb-4 input-group">
+                    <span class="input-group-text"><i class="fas fa-envelope"></i></span>
+                    <input type="email" class="form-control" id="email" name="email" placeholder="Enter email" required>
+                </div>
+                <button type="submit" class="btn btn-primary w-100">Login</button>
+            </form>
+            <div class="text-muted mt-4">
+                Don't have an account? <a href="/sign_up">Sign Up</a>
+            </div>
+        </div>
+    </body>
+    </html>
     '''
+
+
 
 @app.route('/sign_up', methods=['GET', 'POST'])
 def sign_up():
@@ -203,83 +370,159 @@ def sign_up():
         email = request.form['email']
         name = request.form['name']
 
-        state = request.form['state']
-        city = request.form['city']
-        locality = request.form['locality']
-        zipcode = request.form['zipcode']
-        location = f"{locality}, {city}, {state}, {zipcode}"
-
-        # Check if user exists
         if User.query.filter_by(email=email).first():
             flash("Account already exists.")
             return redirect(url_for('login'))
 
-        # Create new user with full location fields
-        user = User(email=email, name=name, location=location,
-                    state=state, city=city, locality=locality, zipcode=zipcode)
+        user = User(email=email, name=name, location="Fetching...", state=None, zipcode=None)
         db.session.add(user)
         db.session.commit()
 
         login_user(user)
         return redirect(url_for('welcome'))
 
-    # GET method: show sign-up form
     return '''
-        <form method="POST">
-            Email: <input type="email" name="email" required><br>
-            Name: <input type="text" name="name" required><br>
-            State: <input type="text" name="state" required><br>
-            City: <input type="text" name="city" required><br>
-            Locality: <input type="text" name="locality" required><br>
-            Zipcode: <input type="text" name="zipcode" required><br>
-            <input type="submit" value="Sign Up">
-        </form>
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <title>Sign Up - Job Connect</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+        <style>
+            body {
+                margin: 0;
+                padding: 0;
+                height: 100vh;
+                background: linear-gradient(135deg, #43cea2, #185a9d);
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                font-family: 'Segoe UI', sans-serif;
+                animation: fadeIn 1s ease-in;
+            }
+
+            @keyframes fadeIn {
+                from { opacity: 0; transform: translateY(20px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+
+            .signup-box {
+                background: rgba(255, 255, 255, 0.95);
+                padding: 40px 30px;
+                border-radius: 20px;
+                box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+                width: 100%;
+                max-width: 420px;
+                text-align: center;
+            }
+
+            .signup-box h2 {
+                font-weight: 700;
+                font-size: 26px;
+                margin-bottom: 25px;
+            }
+
+            .form-label {
+                font-weight: 500;
+            }
+
+            .form-control {
+                padding-left: 40px;
+                border-radius: 10px;
+            }
+
+            .input-group-text {
+                background-color: #e9ecef;
+                border-radius: 10px 0 0 10px;
+                border: none;
+            }
+
+            .btn-success {
+                padding: 12px;
+                font-size: 18px;
+                border-radius: 10px;
+                font-weight: 500;
+            }
+
+            .btn-success:hover {
+                background-color: #117a65;
+                border-color: #117a65;
+            }
+
+            .text-muted a {
+                color: #1e3799;
+                text-decoration: none;
+            }
+
+            .text-muted a:hover {
+                text-decoration: underline;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="signup-box">
+            <h2>Sign Up for <span class="text-primary">Sahayi</span></h2>
+            <form method="POST">
+                <div class="mb-4 input-group">
+                    <span class="input-group-text"><i class="fas fa-envelope"></i></span>
+                    <input type="email" class="form-control" id="email" name="email" placeholder="Email address" required>
+                </div>
+                <div class="mb-4 input-group">
+                    <span class="input-group-text"><i class="fas fa-user"></i></span>
+                    <input type="text" class="form-control" id="name" name="name" placeholder="Full Name" required>
+                </div>
+                <button type="submit" class="btn btn-success w-100">Sign Up</button>
+            </form>
+            <div class="text-muted mt-4">
+                Already have an account? <a href="/login">Login</a>
+            </div>
+        </div>
+    </body>
+    </html>
     '''
 
+
+
+@app.route('/get_location_details', methods=['POST'])
+def get_location_details():
+    data = request.get_json()
+    latitude = data.get('latitude')
+    longitude = data.get('longitude')
+
+    url = f"https://nominatim.openstreetmap.org/reverse?lat={latitude}&lon={longitude}&format=json"
+    headers = {'User-Agent': 'JobConnectApp/1.0'}
+    response = requests.get(url, headers=headers).json()
+
+    print(response)  # Debugging the response from OpenStreetMap
+
+    address = response.get('address', {})
+    state = address.get('state', 'Unknown')
+    zipcode = address.get('postcode', 'Unknown')
+
+    return jsonify({
+        'state': state,
+        'zipcode': zipcode
+    })
+
+@app.route('/update_location', methods=['POST'])
+@login_required
+def update_location():
+    data = request.get_json()
+    current_user.state = data.get('state', 'Unknown')
+    current_user.zipcode = data.get('zipcode', 'Unknown')
+    current_user.latitude = data.get('latitude')
+    current_user.longitude = data.get('longitude')
+    current_user.location_last_updated = datetime.utcnow()
+    db.session.commit()
+    return jsonify({'status': 'success'})
 
 @app.route('/welcome')
 @login_required
 def welcome():
+
     unread_count = Notification.query.filter_by(recipient_id=current_user.id, is_read=False).count()
-
-    return f'''
-        <html>
-        <head>
-            <style>
-                .notification-icon {{
-                    position: absolute;
-                    top: 20px;
-                    right: 20px;
-                    font-size: 20px;
-                    text-decoration: none;
-                    color: black;
-                    background-color: #f0f0f0;
-                    padding: 8px 12px;
-                    border-radius: 20px;
-                    box-shadow: 0 0 5px rgba(0,0,0,0.2);
-                }}
-                .notification-icon:hover {{
-                    background-color: #e0e0e0;
-                }}
-                .container {{
-                    margin-top: 60px;
-                    text-align: center;
-                }}
-            </style>
-        </head>
-        <body>
-            <a href="/notifications" class="notification-icon">🔔 {unread_count}</a>
-            <div class="container">
-                <h2>Welcome {current_user.name}</h2>
-                <p>Welcome to Job Connect! Here you can either provide a job or seek a job.</p>
-                <a href='/provide_job'>Provide Job</a><br><br>
-                <a href='/seek_job'>Seek Job</a><br><br>
-                <a href='/logout'>Logout</a>
-            </div>
-        </body>
-        </html>
-    '''
-
+    return render_template('welcome.html', unread_count=unread_count)
 
 @app.route('/provide_job', methods=['GET', 'POST'])
 @login_required
@@ -289,80 +532,238 @@ def provide_job():
         description = request.form['description']
         job_type = request.form['job_type'].strip().lower()
 
-        # Get current user's location fields
-        user_zip = current_user.zipcode.strip().lower() if current_user.zipcode else ""
-        user_locality = current_user.locality.strip().lower() if current_user.locality else ""
+        user_lat = current_user.latitude
+        user_lon = current_user.longitude
 
-        # Save the job
+        if user_lat is None or user_lon is None:
+            return "<p>Error: Please enable location so we can find nearby workers.</p>"
+
         job = Job(title=title, description=description, user_id=current_user.id)
         db.session.add(job)
         db.session.commit()
 
-        # Tokenize job_type into individual words
         job_keywords = set(job_type.split())
-
         matched_list = ""
         skills = Skill.query.all()
 
         for skill in skills:
             skill_words = set(skill.name.strip().lower().split())
-            # Check if any keyword from job_type matches any word in the skill
             if job_keywords & skill_words:
-                worker = skill.user
+                worker_user = User.query.get(skill.user_id)
+                if not worker_user or not worker_user.latitude or not worker_user.longitude:
+                    continue
 
-                # Get worker's location fields safely
-                worker_zip = worker.zipcode.strip().lower() if worker.zipcode else ""
-                worker_locality = worker.locality.strip().lower() if worker.locality else ""
-
-                # Match if zipcode or locality matches
-                if (worker_zip and worker_zip == user_zip) or (worker_locality and worker_locality == user_locality):
-                    matched_list += f"<li><a href='/worker/{worker.id}?job_id={job.id}'><b>{worker.name}</b></a> - Skill: {skill.name} - Rate: ₹{skill.rate}</li>"
+                distance_km = geodesic((user_lat, user_lon), (worker_user.latitude, worker_user.longitude)).km
+                if distance_km <= 15:
+                    matched_list += f'''
+                    <div class="col-12 col-md-6 col-lg-4">
+                        <div class="card shadow-sm mb-4">
+                            <div class="card-body">
+                                <h5 class="card-title">{worker_user.name}</h5>
+                                <p class="card-text">
+                                    <b>Skill:</b> {skill.name.title()}<br>
+                                    <b>Rate:</b> ₹{skill.rate}<br>
+                                    <b>Distance:</b> {round(distance_km, 2)} km
+                                </p>
+                                <a href="/worker/{worker_user.id}?job_id={job.id}" class="btn btn-primary">View Profile</a>
+                            </div>
+                        </div>
+                    </div>
+                    '''
 
         if not matched_list:
-            matched_list = "<p>No matching workers found near your location.</p>"
-        else:
-            matched_list = f"<ul>{matched_list}</ul>"
+            matched_list = "<p>No matching workers found within 15 km radius.</p>"
 
         return f'''
-            <h3>Job Posted Successfully!</h3>
-            <p>You searched for: <b>{job_type}</b></p>
-            <h3>Matching Workers near your location:</h3>
-            {matched_list}
-            <a href='/welcome'>Back to Welcome</a>
+        <!doctype html>
+        <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>Matching Workers</title>
+          <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+          <style>
+            body {{
+                font-family: Arial, sans-serif;
+                background-color: #f8f9fa;
+                padding: 20px;
+            }}
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="mb-4">
+                <p>You searched for: <b>{job_type}</b></p>
+                <h4 class="mt-4">Matching Workers near your location:</h4>
+            </div>
+            <div class="row">
+                {matched_list}
+            </div>
+          </div>
+        </body>
+        </html>
         '''
 
-    # GET method: show provide job form with dynamic job suggestions
+    # GET method
     skills = Skill.query.all()
     skill_names = [skill.name.strip().lower() for skill in skills]
 
     return render_template_string('''
-        <h2>Provide Job</h2>
-        <form method='POST'>
-            Job Title: <input type='text' name='title' required><br>
-            Job Description: <textarea name='description' required></textarea><br>
-            Type of Job Needed (e.g., plumber, electrician): 
-            <input type='text' name='job_type' id='job_type' list='job-type-list' required><br>
-            <datalist id='job-type-list'>
-                {% for skill in skill_names %}
-                    <option value="{{ skill }}">
-                {% endfor %}
-            </datalist>
-            <input type='submit' value='Post Job & Find Worker'>
-        </form>
-
-        <script>
-            // Optional: You can add some extra functionality for filtering skills dynamically as the user types
-            document.getElementById('job_type').addEventListener('input', function() {
-                let inputText = this.value.toLowerCase();
-                let datalist = document.getElementById('job-type-list');
-                let options = datalist.getElementsByTagName('option');
-
-                for (let option of options) {
-                    option.style.display = option.value.toLowerCase().includes(inputText) ? 'block' : 'none';
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <title>Provide Job</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+                body {
+                    font-family: Arial, sans-serif;
+                    padding: 20px;
+                    margin: 0;
                 }
-            });
-        </script>
+                .form-container {
+                    max-width: 600px;
+                    margin: auto;
+                }
+                input[type="text"],
+                textarea {
+                    width: 100%;
+                    padding: 10px;
+                    margin-top: 5px;
+                    margin-bottom: 20px;
+                    border: 1px solid #ccc;
+                    border-radius: 5px;
+                    box-sizing: border-box;
+                }
+                input[type="submit"] {
+                    background-color: #28a745;
+                    color: white;
+                    padding: 10px 20px;
+                    border: none;
+                    border-radius: 5px;
+                    cursor: pointer;
+                }
+                input[type="submit"]:hover {
+                    background-color: #218838;
+                }
+                @media (max-width: 600px) {
+                    h2, label, input, textarea {
+                        font-size: 16px;
+                    }
+                }
+            </style>
+        </head>
+        <body>
+            <div class="form-container">
+                <h2>Provide Job</h2>
+                <form method='POST'>
+                    <label>Job Title:</label>
+                    <input type='text' name='title' required>
+
+                    <label>Job Description:</label>
+                    <textarea name='description' required></textarea>
+
+                    <label>Type of Job Needed (e.g., plumber, electrician):</label>
+                    <input type='text' name='job_type' id='job_type' list='job-type-list' required>
+
+                    <datalist id='job-type-list'>
+                        {% for skill in skill_names %}
+                            <option value="{{ skill }}">
+                        {% endfor %}
+                    </datalist>
+
+                    <input type='submit' value='Post Job & Find Worker'>
+                </form>
+            </div>
+        </body>
+        </html>
     ''', skill_names=skill_names)
+
+
+@app.route('/confirm_booking/<int:worker_id>', methods=['GET', 'POST'])
+@login_required
+def confirm_booking(worker_id):
+    worker = User.query.get_or_404(worker_id)
+    skill_names = ['Plumber', 'Electrician', 'Carpenter', 'Painter']  # Example; replace with your dynamic data
+
+    # Data passed from previous form
+    job_type = request.args.get('job_type')
+    title = request.args.get('title')
+    description = request.args.get('description')
+
+    if request.method == 'POST':
+        final_title = request.form['title']
+        final_description = request.form['description']
+        time_needed = request.form['time_needed']
+
+        # Save booking
+        booking = Booking(
+            worker_id=worker.id,
+            user_id=current_user.id,
+            date=time_needed,
+            status='Pending'
+        )
+        db.session.add(booking)
+        db.session.commit()
+
+        # Here you could trigger your notification logic (e.g. send email or push)
+        flash(f'Worker {worker.name} booked successfully! Notification sent.')
+
+        return redirect(url_for('welcome'))
+
+    return render_template_string('''
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <title>Confirm Booking</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+        <style>
+            body {
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
+                background-color: #f0f2f5;
+            }
+            .form-container {
+                background: white;
+                padding: 30px;
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+                width: 100%;
+                max-width: 500px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="form-container">
+            <h2 class="mb-4">Confirm Job Booking</h2>
+            <form method="POST">
+                <div class="mb-3">
+                    <label class="form-label">Job Type</label>
+                    <input type="text" class="form-control" value="{{ job_type }}" readonly>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Job Title</label>
+                    <input type="text" class="form-control" name="title" value="{{ title }}" required>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Job Description</label>
+                    <textarea class="form-control" name="description" required>{{ description }}</textarea>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Time Needed (e.g. 2 hours, full day)</label>
+                    <input type="text" class="form-control" name="time_needed" required>
+                </div>
+
+                <button type="submit" class="btn btn-success w-100">Confirm & Book Worker</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    ''', job_type=job_type, title=title, description=description)
 
 
 @app.route('/worker/<int:worker_id>', methods=['GET', 'POST'])
@@ -456,8 +857,8 @@ def view_worker(worker_id):
             </div>
             <br><br>
             <label for="comment">Comment:</label><br>
-            <textarea name="comment" rows="4" cols="50" placeholder="Write your feedback..." required></textarea><br><br>
-            <input type="submit" value="Submit Rating">
+            <textarea name="comment" class="form-control" rows="4" placeholder="Write your feedback..." required></textarea><br><br>
+            <input type="submit" value="Submit Rating" class="btn btn-success">
         </form>
         """
 
@@ -576,37 +977,65 @@ def view_worker(worker_id):
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
         <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+        <style>
+            body {{
+                background-color: #f8f9fa;
+            }}
+            .profile-photo {{
+                 width: 150px;
+                height: 150px;
+                border-radius: 50%;
+                object-fit: cover;
+                object-position: center;
+            }}
+            .carousel-item img, .carousel-item video {{
+                max-height: 500px;
+                object-fit: contain;
+            }}
+        </style>
     </head>
     <body>
-        <div class="container mt-4">
-            <div class="mb-3">
-                <img src="{photo_url}" class="rounded-circle" width="150" height="150" alt="Profile Photo">
+        <div class="container-fluid mt-4">
+            <div class="row justify-content-center">
+                <div class="col-12 col-md-10 col-lg-8">
+                    <div class="text-center mb-3">
+                        <img src="{photo_url}" class="rounded-circle img-fluid profile-photo" alt="Profile Photo">
+                    </div>
+                    <div class="card p-3 shadow-sm">
+                        <h2 class="text-center mb-3">{user.name}'s Profile</h2>
+                        <p><strong>Gender:</strong> {gender}</p>
+                        <p><strong>Age:</strong> {worker_profile.age if worker_profile else ''}</p>
+                        <p><strong>About Me:</strong> {worker_profile.about if worker_profile else user.about}</p>
+                        <p><strong>Qualification:</strong> {worker_profile.qualification if worker_profile else ''}</p>
+                        <p><strong>Experience:</strong> {worker_profile.experience if worker_profile else ''}</p>
+
+                        <hr>
+                        <h4>Skills</h4>
+                        {skill_list}
+
+                        <hr>
+                        <h4>Showcase</h4>
+                        {photo_modals}
+
+                        <hr>
+                        {message}
+                        {book_button}
+
+                        <hr>
+                        {rating_form}
+
+                        <hr>
+                        {rating_display}
+
+                        <div class="text-center mt-4">
+                        </div>
+                    </div>
+                </div>
             </div>
-            <h2 class="mb-3">{user.name}'s Profile</h2>
-            <p><b>Gender:</b> {gender}</p>
-            <p><b>Age:</b> {worker_profile.age if worker_profile else ''}</p>
-            <p><b>Location:</b> {user.location}</p>
-            <p><b>About Me:</b> {worker_profile.about if worker_profile else user.about}</p>
-            <p><b>Qualification:</b> {worker_profile.qualification if worker_profile else ''}</p>
-            <p><b>Experience:</b> {worker_profile.experience if worker_profile else ''}</p>
-            <p><b>Skills:</b></p>
-            {skill_list}
-            <hr>
-            <h3>Showcase</h3>
-            {photo_modals}
-            <hr>
-            {message}
-            {book_button}
-            <hr>
-            {rating_form}
-            <br>
-            {rating_display}
-            <br><a href='/welcome' class='btn btn-secondary mt-3'>Back to Welcome</a>
         </div>
     </body>
     </html>
     """
-
 
 
 @app.route('/notifications')
@@ -614,46 +1043,105 @@ def view_worker(worker_id):
 def notifications():
     notes = Notification.query.filter_by(recipient_id=current_user.id).order_by(Notification.timestamp.desc()).all()
 
-    html = "<h2>Your Notifications</h2><ul>"
+    html_notifications = ""
     for n in notes:
         if not n.is_read:
             n.is_read = True  # Mark as read
-        html += f"<li>{n.message}<br>"
+
+        html_notifications += f'''
+            <div class="card mb-3">
+                <div class="card-body">
+                    <p class="card-text">{n.message}</p>
+        '''
+
         if n.action_type == 'booking_request':
-            html += f'''
-                <form action="/respond_notification/{n.id}" method="post">
-                    <input type="submit" name="response" value="Accept">
-                    <input type="submit" name="response" value="Reject">
+            html_notifications += f'''
+                <form action="/respond_notification/{n.id}" method="post" class="d-flex gap-2">
+                    <input type="submit" name="response" value="Accept" class="btn btn-success btn-sm">
+                    <input type="submit" name="response" value="Reject" class="btn btn-danger btn-sm">
                 </form>
             '''
-        html += "</li><br>"
-    html += "</ul><a href='/welcome'>Back to Dashboard</a>"
+
+        html_notifications += "</div></div>"
+
     db.session.commit()
-    return html
+
+    return f'''
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <title>Notifications - JobConnect</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+        <style>
+            body {{
+                background-color: #f8f9fa;
+                padding: 20px;
+            }}
+            .card {{
+                border-radius: 8px;
+                box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h2 class="mb-4 text-center">🔔 Your Notifications</h2>
+            {html_notifications if html_notifications else "<p>No notifications yet.</p>"}
+            <div class="text-center mt-4">
+            </div>
+        </div>
+    </body>
+    </html>
+    '''
 
 
 @app.route('/book_worker/<int:worker_id>', methods=['POST'])
 @login_required
 def book_worker(worker_id):
-    # assume a job_id or similar context exists
-    job_id = 123  # placeholder
+    job_id = request.form.get('job_id')
 
-    worker = User.query.get_or_404(worker_id)
-
-    notification = Notification(
-        recipient_id=worker.id,
-        sender_id=current_user.id,
-        message=f"{current_user.name} has requested to book you for a job.",
+    # Save booking
+    booking = Booking(
+        worker_id=worker_id,
+        provider_id=current_user.id,  # ✅ Correct: provider_id refers to job giver
         job_id=job_id,
-        action_type='booking_request'
+        status="Pending"
     )
-    db.session.add(notification)
+    db.session.add(booking)
     db.session.commit()
 
-    return f'''
-        <p>Booking request sent to {worker.name}!</p>
-        <a href="/welcome">Back to Dashboard</a>
-    '''
+    flash("Worker booked successfully!")
+
+    # Redirect to a page that shows booking details
+    return redirect(url_for('confirm_booking', worker_id=worker_id))
+
+
+
+
+# @app.route('/book_worker/<int:worker_id>', methods=['POST'])
+# @login_required
+# def book_worker(worker_id):
+#     # assume a job_id or similar context exists
+#     job_id = request.form.get('job_id')
+#
+#     worker = User.query.get_or_404(worker_id)
+#
+#     notification = Notification(
+#         recipient_id=worker.id,
+#         sender_id=current_user.id,
+#         message=f"{current_user.name} has requested to book you for a job.",
+#         job_id=job_id,
+#         action_type='booking_request'
+#     )
+#     db.session.add(notification)
+#     db.session.commit()
+#
+#     return f'''
+#         <p>Booking request sent to {worker.name}!</p>
+#
+#     '''
 
 
 @app.route('/respond_notification/<int:notification_id>', methods=['POST'])
@@ -691,7 +1179,6 @@ def respond_notification(notification_id):
 
     return f'''
         <p>You have {response.lower()}ed the request.</p>
-        <a href="/notifications">Back to Notifications</a>
     '''
 
 @app.route('/seek_job')
@@ -791,40 +1278,118 @@ def seek_job():
     <!DOCTYPE html>
     <html lang="en">
     <head>
-        <title>Worker Profile</title>
+        <title>My Worker Profile - JobConnect</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+
+        <!-- Bootstrap CSS & JS -->
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
         <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+        <!-- Google Fonts -->
+        <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+
+        <!-- Bootstrap Icons (optional) -->
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
+
+        <style>
+            body {{
+                font-family: 'Poppins', sans-serif;
+                background: linear-gradient(to right, #f0f4f8, #ffffff);
+                color: #333;
+            }}
+
+            .profile-card {{
+                background: #fff;
+                border-radius: 12px;
+                padding: 30px;
+                box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
+            }}
+
+            .profile-photo {{
+                width: 130px;
+                height: 130px;
+                object-fit: cover;
+                border-radius: 50%;
+                border: 3px solid #007bff;
+            }}
+
+            .info-label {{
+                font-weight: 600;
+                color: #555;
+            }}
+
+            .rating-stars {{
+                font-size: 1.2rem;
+                color: #f39c12;
+            }}
+
+            .showcase-preview img {{
+                cursor: pointer;
+                width: 150px;
+                border-radius: 8px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            }}
+
+            ul {{
+                padding-left: 20px;
+            }}
+
+            @media (max-width: 768px) {{
+                .profile-photo {{
+                    width: 100px;
+                    height: 100px;
+                }}
+            }}
+        </style>
     </head>
     <body>
-        <div class="container mt-4">
-            <h2>Your Worker Profile</h2>
-            <div class="mb-3">
-                <img src="{photo_url}" class="rounded-circle" width="150" height="150" alt="Profile Photo">
-            </div>
-            <p><b>Worker ID:</b> {profile.worker_code}</p>
-            <p><b>Name:</b> {user.name}</p>
-            <p><b>Gender:</b> {gender}</p>
-            <p><b>Age:</b> {profile.age}</p>
-            <p><b>Contact:</b> {profile.phone}</p>
-            <p><b>Qualification:</b> {profile.qualification}</p>
-            <p><b>Experience:</b> {profile.experience}</p>
-            <p><b>About Me:</b> {profile.about}</p>
-            <p><b>Skills:</b> {skills_str}</p>
-            <p><b>Rating:</b> {avg_rating}</p>
-            {rating_display}
+        <div class="container my-5">
+            <div class="profile-card">
+                <div class="d-flex flex-row flex-wrap align-items-start justify-content-between">
+                    <div>
+                        <h2 class="mb-2">👤 {user.name}</h2>
+                        <p><span class="info-label">Worker ID:</span> {profile.worker_code}</p>
+                        <p><span class="info-label">Gender:</span> {gender}</p>
+                        <p><span class="info-label">Age:</span> {profile.age}</p>
+                        <p><span class="info-label">Phone:</span> {profile.phone}</p>
+                        <p><span class="info-label">Qualification:</span> {profile.qualification}</p>
+                        <p><span class="info-label">Experience:</span> {profile.experience}</p>
+                        <p><span class="info-label">Skills:</span> {skills_str}</p>
+                    </div>
+                    <div class="ms-auto text-end">
+                            <img src="{photo_url}" alt="Profile Photo" class="profile-photo shadow-sm">
+                    </div>
+                </div>
+                <hr>
 
-            <h2>Showcase</h2>
-            <div class="d-flex gap-3 flex-wrap">
-                {photo_modals}
-            </div>
+                <div class="mt-3">
+                    <h5>About Me</h5>
+                    <p>{profile.about}</p>
+                </div>
 
-            <br>
-            <a href="/edit_worker_profile" class="btn btn-success mt-3">Edit Profile</a>
-            <a href="/welcome" class="btn btn-secondary mt-3">Back to Welcome</a>
+                <div class="mt-4">
+                    <h5>⭐ Ratings</h5>
+                    <p class="rating-stars"><b>Average:</b> {avg_rating if isinstance(avg_rating, str) else f"{avg_rating} ★"}</p>
+                    {rating_display}
+                </div>
+
+                <div class="mt-4">
+                    <h5>🎥 Showcase</h5>
+                    {photo_modals}
+                </div>
+
+                <div class="mt-4 text-end">
+                    <a href="/edit_worker_profile" class="btn btn-outline-primary">
+                        ✏️ Edit Profile
+                    </a>
+                </div>
+            </div>
         </div>
     </body>
     </html>
     '''
+
 
 def generate_unique_worker_id():
     custom_id = WorkerProfile.query.count() + 1
@@ -867,21 +1432,17 @@ def create_worker_profile():
         return redirect(url_for('edit_worker_profile'))
 
     if request.method == 'POST':
-        # generate custom worker ID
         worker_code = generate_unique_worker_id()
 
-        # all form fields...
         age = int(request.form['age'])
         gender = request.form['gender']
         qualification = request.form['qualification']
         experience = request.form['experience']
         about = request.form['about']
-        locality = request.form.get('locality')
-        city = request.form.get('city')
         state = request.form.get('state')
         zipcode = request.form.get('zipcode')
         phone = request.form.get('phone')
-        full_location = f"{locality}, {city}, {state}, {zipcode}"
+        full_location = f"{state}, {zipcode}"
 
         photo_file = request.files.get('photo')
         photo_filename = None
@@ -893,14 +1454,12 @@ def create_worker_profile():
 
         new_profile = WorkerProfile(
             user_id=current_user.id,
-            worker_code=worker_code,  # <-- save the generated code
+            worker_code=worker_code,
             age=age,
             gender=gender,
             qualification=qualification,
             experience=experience,
             about=about,
-            locality=locality,
-            city=city,
             state=state,
             zipcode=zipcode,
             photo=photo_filename,
@@ -908,7 +1467,6 @@ def create_worker_profile():
         )
         db.session.add(new_profile)
 
-        # save skills
         skills = request.form.getlist('skills')
         rates = request.form.getlist('rates')
         for skill_name, rate in zip(skills, rates):
@@ -926,75 +1484,141 @@ def create_worker_profile():
         flash("Profile created successfully.")
         return redirect(url_for('seek_job'))
 
-    # render form...
-
-
     return '''
-    <h2>Create Worker Profile</h2>
-    <form method="POST" enctype="multipart/form-data">
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <title>Create Worker Profile</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+        <style>
+            body {
+                background: #f5f7fa;
+            }
+            .profile-container {
+                max-width: 800px;
+                margin: auto;
+                background: #fff;
+                padding: 30px;
+                border-radius: 15px;
+                box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+            }
+            .profile-pic {
+                width: 140px;
+                height: 140px;
+                object-fit: cover;
+                border-radius: 50%;
+                border: 4px solid #0d6efd;
+                transition: 0.3s ease;
+            }
+            .profile-pic:hover {
+                opacity: 0.9;
+                transform: scale(1.03);
+            }
+            .skill-row {
+                display: flex;
+                gap: 10px;
+                margin-top: 10px;
+            }
+            .btn-danger {
+                white-space: nowrap;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container mt-5">
+            <div class="profile-container">
+                <h3 class="text-center mb-4 text-primary">🛠️ Create Your Worker Profile</h3>
 
-        <!-- Profile Image Upload -->
-        <div style="text-align:center; margin-bottom:20px;">
-            <label for="photo" style="cursor:pointer;">
-                <img id="preview" src="/static/uploads/default.jpg" 
-                     style="width:150px; height:150px; border-radius:50%; object-fit:cover; border:3px solid #ccc;" 
-                     alt="Profile Photo">
-            </label>
-            <input type="file" id="photo" name="photo" accept="image/*" style="display:none;" onchange="loadPreview(event)">
+                <form method="POST" enctype="multipart/form-data">
+
+                    <!-- Profile Photo Upload -->
+                    <div class="text-center mb-4">
+                        <label for="photo" style="cursor:pointer;">
+                            <img id="preview" src="/static/uploads/default.jpg" class="profile-pic" alt="Profile Photo">
+                        </label>
+                        <input type="file" id="photo" name="photo" accept="image/*" style="display:none;" onchange="loadPreview(event)">
+                        <div class="form-text mt-2">Tap the photo to upload your image</div>
+                    </div>
+
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Age</label>
+                            <input type="number" class="form-control" name="age" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Gender</label>
+                            <select class="form-select" name="gender" required>
+                                <option value="" selected disabled>Select</option>
+                                <option value="Male">Male</option>
+                                <option value="Female">Female</option>
+                            </select>
+                        </div>
+
+                        <div class="col-md-6">
+                            <label class="form-label">Phone Number</label>
+                            <input type="text" class="form-control" name="phone" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Qualification</label>
+                            <input type="text" class="form-control" name="qualification" required>
+                        </div>
+
+                        <div class="col-12">
+                            <label class="form-label">Experience</label>
+                            <input type="text" class="form-control" name="experience" required>
+                        </div>
+
+                        <div class="col-12">
+                            <label class="form-label">About Me</label>
+                            <textarea class="form-control" name="about" rows="3" required></textarea>
+                        </div>
+                    </div>
+
+                    <!-- Skill Section -->
+                    <h5 class="mt-4 mb-2 text-primary">🔧 Skills & Rates</h5>
+                    <div id="skills-section">
+                        <div class="skill-row">
+                            <input type="text" class="form-control" name="skills" placeholder="Skill (e.g., Electrician)" required>
+                            <input type="number" class="form-control" name="rates" placeholder="Rate/hr (₹)" required>
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-outline-secondary mt-2" onclick="addSkill()">➕ Add Skill</button>
+
+                    <!-- Submit -->
+                    <div class="mt-4">
+                        <button type="submit" class="btn btn-primary w-100">Create Profile</button>
+                    </div>
+
+                </form>
+            </div>
         </div>
 
-        Age: <input type="number" name="age" required><br>
-        Gender: 
-        <select name="gender" required>
-            <option value="Male">Male</option>
-            <option value="Female">Female</option>
-        </select><br>
-        Phone Number: <input type="text" name="phone" required><br>
-        Qualification: <input type="text" name="qualification" required><br>
-        Experience: <input type="text" name="experience" required><br>
-        About Me: <textarea name="about" required></textarea><br>
+        <!-- JavaScript -->
+        <script>
+            function addSkill() {
+                const container = document.getElementById('skills-section');
+                const row = document.createElement('div');
+                row.className = 'skill-row';
+                row.innerHTML = `
+                    <input type="text" class="form-control" name="skills" placeholder="Skill" required>
+                    <input type="number" class="form-control" name="rates" placeholder="Rate/hr (₹)" required>
+                    <button type="button" class="btn btn-danger" onclick="this.parentElement.remove()">❌</button>
+                `;
+                container.appendChild(row);
+            }
 
-        <h3>Location</h3>
-        Locality: <input type="text" name="locality" required><br>
-        City: <input type="text" name="city" required><br>
-        State: <input type="text" name="state" required><br>
-        Zipcode: <input type="text" name="zipcode" required><br><br>
-
-        <h3>Skills</h3>
-        <div id="skills-section">
-            <input type="text" name="skills" placeholder="Skill (e.g., plumber)" required>
-            <input type="number" name="rates" placeholder="Rate per hour (₹)" required>
-        </div>
-        <button type="button" onclick="addSkill()">Add Another Skill</button><br><br>
-
-        <input type="submit" value="Create Profile">
-    </form>
-
-    <script>
-        function addSkill() {
-            const container = document.getElementById('skills-section');
-            const skillGroup = document.createElement('div');
-            skillGroup.className = 'skill-group';
-            skillGroup.innerHTML = `
-                <input type="text" name="skills" placeholder="Skill (e.g., carpenter)" required>
-                <input type="number" name="rates" placeholder="Rate per hour (₹)" required>
-                <button type="button" onclick="removeSkill(this)">Remove</button><br>
-            `;
-            container.appendChild(skillGroup);
-        }
-
-        function removeSkill(button) {
-            const skillGroup = button.parentNode;
-            skillGroup.remove();
-        }
-
-        function loadPreview(event) {
-            const preview = document.getElementById('preview');
-            preview.src = URL.createObjectURL(event.target.files[0]);
-            preview.onload = () => URL.revokeObjectURL(preview.src);
-        }
-    </script>
+            function loadPreview(event) {
+                const preview = document.getElementById('preview');
+                preview.src = URL.createObjectURL(event.target.files[0]);
+                preview.onload = () => URL.revokeObjectURL(preview.src);
+            }
+        </script>
+    </body>
+    </html>
     '''
+
 
 @app.route('/edit_worker_profile', methods=['GET', 'POST'])
 @login_required
