@@ -4,7 +4,7 @@ from flask_login import LoginManager, login_user, logout_user, login_required, c
 from geopy.distance import geodesic
 import os
 import random
-from datetime import datetime
+from datetime import datetime,timedelta
 import requests
 from geopy.geocoders import Nominatim
 from werkzeug.utils import secure_filename
@@ -47,6 +47,7 @@ class User(UserMixin, db.Model):
     state = db.Column(db.String(100))
     zipcode = db.Column(db.String(20))
     phone = db.Column(db.String(20))
+    tokens = db.Column(db.Integer, default=5000)  # 🪙 Initial balance
     # Define the one-to-one relationship with WorkerProfile
     worker_profile = db.relationship('WorkerProfile', backref='user', uselist=False)
 
@@ -55,8 +56,10 @@ class Skill(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     rate = db.Column(db.String(100), nullable=False)
-    location = db.Column(db.String(100))  # added this
+    rate_type = db.Column(db.String(50))
+    location = db.Column(db.String(100))
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+
 
 class Job(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -105,7 +108,7 @@ class Booking(db.Model):
     provider_id = db.Column(db.Integer, db.ForeignKey('user.id'))  # Job giver
     worker_id = db.Column(db.Integer, db.ForeignKey('user.id'))    # Worker
     status = db.Column(db.String(20), default='pending')           # pending / accepted / declined
-
+    expires_at = db.Column(db.DateTime)
     job = db.relationship('Job', backref='bookings')
     provider = db.relationship('User', foreign_keys=[provider_id])
     worker = db.relationship('User', foreign_keys=[worker_id])
@@ -117,12 +120,13 @@ class Notification(db.Model):
     sender_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     message = db.Column(db.String(255), nullable=False)
     job_id = db.Column(db.Integer, nullable=True)
-    action_type = db.Column(db.String(50))  # 'booking_request', 'accept', 'reject'
+    action_type = db.Column(db.String(50))  # e.g., booking_request, accepted, rejected
     is_read = db.Column(db.Boolean, default=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-
+    booking_id = db.Column(db.Integer, db.ForeignKey('booking.id'))
     recipient = db.relationship('User', foreign_keys=[recipient_id])
     sender = db.relationship('User', foreign_keys=[sender_id])
+
 
 class ShowcaseImage(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -524,12 +528,65 @@ def welcome():
     unread_count = Notification.query.filter_by(recipient_id=current_user.id, is_read=False).count()
     return render_template('welcome.html', unread_count=unread_count)
 
+@app.route('/verify_otp/<int:booking_id>', methods=['GET', 'POST'])
+@login_required
+def verify_otp(booking_id):
+    booking = Booking.query.get_or_404(booking_id)
+    if booking.worker_id != current_user.id:
+        abort(403)
+
+    if request.method == 'POST':
+        entered = request.form['otp']
+        if booking.otp_code == entered:
+            booking.otp_verified = True
+            booking.status = 'Confirmed'
+            # Transfer tokens from escrow (here: update job seeker)
+            current_user.token_balance += int(booking.job.amount or 0)
+            db.session.commit()
+            flash("OTP verified. Job confirmed!")
+            return redirect(url_for('dashboard'))
+
+        flash("Invalid OTP. Try again.")
+
+    return render_template("verify_otp.html")
+
+@app.route('/show_otp/<int:booking_id>')
+@login_required
+def show_otp(booking_id):
+    booking = Booking.query.get_or_404(booking_id)
+    if booking.provider_id != current_user.id:
+        abort(403)
+    return render_template("show_otp.html", otp=booking.otp_code)
+
+
+
+@app.route('/make_payment/<int:booking_id>', methods=['GET', 'POST'])
+@login_required
+def make_payment(booking_id):
+    booking = Booking.query.get_or_404(booking_id)
+    if booking.provider_id != current_user.id:
+        abort(403)
+
+    if request.method == 'POST':
+        amount = int(request.form['amount'])  # token amount
+        if current_user.token_balance >= amount:
+            current_user.token_balance -= amount
+            booking.payment_made = True
+            booking.otp_code = f"{random.randint(100000, 999999)}"
+            db.session.commit()
+            flash("Payment made. Share the OTP with the worker.")
+            return redirect(url_for('show_otp', booking_id=booking.id))
+        else:
+            flash("Insufficient token balance.")
+
+    return render_template("make_payment.html", booking=booking)
+
+
+
 @app.route('/provide_job', methods=['GET', 'POST'])
 @login_required
 def provide_job():
     if request.method == 'POST':
-        title = request.form['title']
-        description = request.form['description']
         job_type = request.form['job_type'].strip().lower()
 
         user_lat = current_user.latitude
@@ -538,13 +595,18 @@ def provide_job():
         if user_lat is None or user_lon is None:
             return "<p>Error: Please enable location so we can find nearby workers.</p>"
 
-        job = Job(title=title, description=description, user_id=current_user.id)
+        # Save job
+        job = Job(
+            title=job_type.title(),
+            description=f"You are seeking help for: {job_type.title()}",
+            user_id=current_user.id
+        )
         db.session.add(job)
         db.session.commit()
 
         job_keywords = set(job_type.split())
-        matched_list = ""
         skills = Skill.query.all()
+        matched_workers = {}  # Track first matched skill per worker
 
         for skill in skills:
             skill_words = set(skill.name.strip().lower().split())
@@ -553,23 +615,37 @@ def provide_job():
                 if not worker_user or not worker_user.latitude or not worker_user.longitude:
                     continue
 
-                distance_km = geodesic((user_lat, user_lon), (worker_user.latitude, worker_user.longitude)).km
-                if distance_km <= 15:
-                    matched_list += f'''
-                    <div class="col-12 col-md-6 col-lg-4">
-                        <div class="card shadow-sm mb-4">
-                            <div class="card-body">
-                                <h5 class="card-title">{worker_user.name}</h5>
-                                <p class="card-text">
-                                    <b>Skill:</b> {skill.name.title()}<br>
-                                    <b>Rate:</b> ₹{skill.rate}<br>
-                                    <b>Distance:</b> {round(distance_km, 2)} km
-                                </p>
-                                <a href="/worker/{worker_user.id}?job_id={job.id}" class="btn btn-primary">View Profile</a>
-                            </div>
-                        </div>
+                distance_km = geodesic(
+                    (user_lat, user_lon),
+                    (worker_user.latitude, worker_user.longitude)
+                ).km
+
+                if distance_km <= 15 and worker_user.id not in matched_workers:
+                    matched_workers[worker_user.id] = {
+                        "user": worker_user,
+                        "skill_name": skill.name,
+                        "rate": skill.rate,
+                        "rate_type": skill.rate_type,
+                        "distance": round(distance_km, 2)
+                    }
+
+        matched_list = ""
+        for data in matched_workers.values():
+            matched_list += f'''
+            <div class="col-12 col-md-6 col-lg-4">
+                <div class="card shadow-sm mb-4">
+                    <div class="card-body">
+                        <h5 class="card-title">{data["user"].name}</h5>
+                        <p class="card-text">
+                            <b>Skill:</b> {data["skill_name"].title()}<br>
+                            <b>Rate:</b> ₹{data["rate"]} / {data["rate_type"]}<br>
+                            <b>Distance:</b> {data["distance"]} km
+                        </p>
+                        <a href="/worker/{data["user"].id}?job_id={job.id}&skill={data["skill_name"]}" class="btn btn-primary">View Profile</a>
                     </div>
-                    '''
+                </div>
+            </div>
+            '''
 
         if not matched_list:
             matched_list = "<p>No matching workers found within 15 km radius.</p>"
@@ -593,7 +669,7 @@ def provide_job():
         <body>
           <div class="container">
             <div class="mb-4">
-                <p>You searched for: <b>{job_type}</b></p>
+                <p>🔍 You searched for: <b>{job_type}</b></p>
                 <h4 class="mt-4">Matching Workers near your location:</h4>
             </div>
             <div class="row">
@@ -604,7 +680,7 @@ def provide_job():
         </html>
         '''
 
-    # GET method
+    # GET method: render form
     skills = Skill.query.all()
     skill_names = [skill.name.strip().lower() for skill in skills]
 
@@ -612,20 +688,29 @@ def provide_job():
         <!DOCTYPE html>
         <html lang="en">
         <head>
-            <title>Provide Job</title>
+            <title>Search for Sahayi</title>
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <style>
                 body {
                     font-family: Arial, sans-serif;
                     padding: 20px;
                     margin: 0;
+                    background-color: #f2f2f2;
                 }
                 .form-container {
                     max-width: 600px;
                     margin: auto;
+                    background: white;
+                    padding: 30px;
+                    border-radius: 10px;
+                    box-shadow: 0 5px 15px rgba(0,0,0,0.1);
                 }
-                input[type="text"],
-                textarea {
+                label {
+                    font-weight: bold;
+                    margin-bottom: 5px;
+                    display: block;
+                }
+                input[type="text"] {
                     width: 100%;
                     padding: 10px;
                     margin-top: 5px;
@@ -635,18 +720,19 @@ def provide_job():
                     box-sizing: border-box;
                 }
                 input[type="submit"] {
-                    background-color: #28a745;
+                    background-color: #007bff;
                     color: white;
                     padding: 10px 20px;
                     border: none;
                     border-radius: 5px;
                     cursor: pointer;
+                    width: 100%;
                 }
                 input[type="submit"]:hover {
-                    background-color: #218838;
+                    background-color: #0056b3;
                 }
                 @media (max-width: 600px) {
-                    h2, label, input, textarea {
+                    input, label {
                         font-size: 16px;
                     }
                 }
@@ -654,16 +740,10 @@ def provide_job():
         </head>
         <body>
             <div class="form-container">
-                <h2>Provide Job</h2>
+                <h2 class="text-center">🔍 Search for Sahayi</h2>
                 <form method='POST'>
-                    <label>Job Title:</label>
-                    <input type='text' name='title' required>
-
-                    <label>Job Description:</label>
-                    <textarea name='description' required></textarea>
-
-                    <label>Type of Job Needed (e.g., plumber, electrician):</label>
-                    <input type='text' name='job_type' id='job_type' list='job-type-list' required>
+                    <label for="job_type">What help do you need?</label>
+                    <input type='text' name='job_type' id='job_type' list='job-type-list' placeholder="e.g., plumber, electrician" required>
 
                     <datalist id='job-type-list'>
                         {% for skill in skill_names %}
@@ -671,7 +751,7 @@ def provide_job():
                         {% endfor %}
                     </datalist>
 
-                    <input type='submit' value='Post Job & Find Worker'>
+                    <input type='submit' value='Search Workers Near You'>
                 </form>
             </div>
         </body>
@@ -679,91 +759,84 @@ def provide_job():
     ''', skill_names=skill_names)
 
 
+
+
 @app.route('/confirm_booking/<int:worker_id>', methods=['GET', 'POST'])
 @login_required
 def confirm_booking(worker_id):
+    from datetime import datetime
     worker = User.query.get_or_404(worker_id)
-    skill_names = ['Plumber', 'Electrician', 'Carpenter', 'Painter']  # Example; replace with your dynamic data
-
-    # Data passed from previous form
-    job_type = request.args.get('job_type')
-    title = request.args.get('title')
-    description = request.args.get('description')
+    skills = Skill.query.filter_by(user_id=worker.id).all()
 
     if request.method == 'POST':
-        final_title = request.form['title']
-        final_description = request.form['description']
-        time_needed = request.form['time_needed']
+        description = request.form['description']
+        skill_name = request.form['skill']
+        rate_type = request.form['rate_type']
+        quantity = request.form.get('quantity')
+        job_id = request.args.get("job_id")
 
-        # Save booking
+        if not quantity or float(quantity) <= 0:
+            flash("Please enter a valid quantity.")
+            return redirect(request.url)
+
+        skill = Skill.query.filter_by(user_id=worker.id, name=skill_name.lower().strip()).first()
+
         booking = Booking(
             worker_id=worker.id,
-            user_id=current_user.id,
-            date=time_needed,
+            provider_id=current_user.id,
+            job_id=job_id,
             status='Pending'
         )
         db.session.add(booking)
+        db.session.flush()  # ✅ We get booking.id before commit
+
+        from geopy.distance import geodesic
+        try:
+            distance_km = round(
+                geodesic((current_user.latitude, current_user.longitude),
+                         (worker.latitude, worker.longitude)).km,
+                2
+            )
+        except:
+            distance_km = "Unknown"
+
+        rate_type_clean = rate_type.lower()
+        if "hour" in rate_type_clean:
+            quantity_text = f"{quantity} hour(s)"
+        elif "job" in rate_type_clean:
+            quantity_text = f"{quantity} job(s)"
+        elif "kilo" in rate_type_clean:
+            quantity_text = f"{quantity} kilo(s)"
+        elif "meter" in rate_type_clean:
+            quantity_text = f"{quantity} kilometer(s)"
+        else:
+            quantity_text = f"{quantity} {rate_type}"
+
+        message = f"""
+        📢 <b>New booking request</b><br>
+        🧰 <b>Skill:</b> {skill_name.title()}<br>
+        🕒 <b>Requested:</b> {quantity_text}<br>
+        📍 <b>Distance:</b> {distance_km} km<br>
+        📝 <b>Job Description:</b> {description[:150]}
+        """
+
+        notification = Notification(
+            recipient_id=worker.id,
+            sender_id=current_user.id,
+            message=message,
+            action_type='booking_request',
+            job_id=job_id,
+            booking_id=booking.id  # ✅ Required
+        )
+        db.session.add(notification)
         db.session.commit()
 
-        # Here you could trigger your notification logic (e.g. send email or push)
-        flash(f'Worker {worker.name} booked successfully! Notification sent.')
-
+        flash("Booking submitted successfully.")
         return redirect(url_for('welcome'))
 
-    return render_template_string('''
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <title>Confirm Booking</title>
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-        <style>
-            body {
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                height: 100vh;
-                background-color: #f0f2f5;
-            }
-            .form-container {
-                background: white;
-                padding: 30px;
-                border-radius: 8px;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-                width: 100%;
-                max-width: 500px;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="form-container">
-            <h2 class="mb-4">Confirm Job Booking</h2>
-            <form method="POST">
-                <div class="mb-3">
-                    <label class="form-label">Job Type</label>
-                    <input type="text" class="form-control" value="{{ job_type }}" readonly>
-                </div>
+    return render_template("confirm_booking.html", worker=worker, skills=skills)
 
-                <div class="mb-3">
-                    <label class="form-label">Job Title</label>
-                    <input type="text" class="form-control" name="title" value="{{ title }}" required>
-                </div>
 
-                <div class="mb-3">
-                    <label class="form-label">Job Description</label>
-                    <textarea class="form-control" name="description" required>{{ description }}</textarea>
-                </div>
-
-                <div class="mb-3">
-                    <label class="form-label">Time Needed (e.g. 2 hours, full day)</label>
-                    <input type="text" class="form-control" name="time_needed" required>
-                </div>
-
-                <button type="submit" class="btn btn-success w-100">Confirm & Book Worker</button>
-            </form>
-        </div>
-    </body>
-    </html>
-    ''', job_type=job_type, title=title, description=description)
 
 
 @app.route('/worker/<int:worker_id>', methods=['GET', 'POST'])
@@ -771,7 +844,12 @@ def confirm_booking(worker_id):
 def view_worker(worker_id):
     user = User.query.get_or_404(worker_id)
     worker_profile = user.worker_profile
-    skills = Skill.query.filter_by(user_id=user.id).all()
+    searched_skill_name = request.args.get("skill")
+    if searched_skill_name:
+        skills = Skill.query.filter_by(user_id=user.id, name=searched_skill_name.strip().lower()).all()
+    else:
+        skills = Skill.query.filter_by(user_id=user.id).all()
+
     showcase_images = ShowcaseImage.query.filter_by(user_id=user.id).order_by(ShowcaseImage.uploaded_at.desc()).all()
     job_id = request.args.get('job_id')
     profile = WorkerProfile.query.filter_by(user_id=user.id).first()
@@ -869,7 +947,7 @@ def view_worker(worker_id):
     rating_display += "</ul>"
     # Skills
     skill_list = "<ul class='list-group'>" + "".join(
-        [f"<li class='list-group-item'>{s.name.title()} - ₹{s.rate}/hr</li>" for s in skills]) + "</ul>"
+        [f"<li class='list-group-item'>{s.name.title()} - ₹{s.rate} / {s.rate_type}</li>" for s in skills]) + "</ul>"
 
     # Media showcase (carousel)
     media_items = ""
@@ -1043,6 +1121,7 @@ def view_worker(worker_id):
 def notifications():
     notes = Notification.query.filter_by(recipient_id=current_user.id).order_by(Notification.timestamp.desc()).all()
 
+
     html_notifications = ""
     for n in notes:
         if not n.is_read:
@@ -1056,9 +1135,15 @@ def notifications():
 
         if n.action_type == 'booking_request':
             html_notifications += f'''
-                <form action="/respond_notification/{n.id}" method="post" class="d-flex gap-2">
+                <form action="/respond_notification/{n.id}" method="post" class="d-flex gap-2 mt-2">
                     <input type="submit" name="response" value="Accept" class="btn btn-success btn-sm">
                     <input type="submit" name="response" value="Reject" class="btn btn-danger btn-sm">
+                </form>
+            '''
+        elif n.action_type == 'payment_required':
+            html_notifications += f'''
+                <form action="/pay_token/{n.booking_id}" method="get" class="d-flex gap-2 mt-2">
+                    <button type="submit" class="btn btn-warning btn-sm">💳 Pay Token Now</button>
                 </form>
             '''
 
@@ -1083,39 +1168,32 @@ def notifications():
                 border-radius: 8px;
                 box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
             }}
+            .card-text {{
+                font-size: 16px;
+                line-height: 1.5;
+            }}
         </style>
     </head>
     <body>
         <div class="container">
             <h2 class="mb-4 text-center">🔔 Your Notifications</h2>
             {html_notifications if html_notifications else "<p>No notifications yet.</p>"}
-            <div class="text-center mt-4">
-            </div>
         </div>
     </body>
     </html>
     '''
 
 
+
+
+
 @app.route('/book_worker/<int:worker_id>', methods=['POST'])
 @login_required
 def book_worker(worker_id):
     job_id = request.form.get('job_id')
+    return redirect(url_for('confirm_booking', worker_id=worker_id, job_id=job_id))
 
-    # Save booking
-    booking = Booking(
-        worker_id=worker_id,
-        provider_id=current_user.id,  # ✅ Correct: provider_id refers to job giver
-        job_id=job_id,
-        status="Pending"
-    )
-    db.session.add(booking)
-    db.session.commit()
 
-    flash("Worker booked successfully!")
-
-    # Redirect to a page that shows booking details
-    return redirect(url_for('confirm_booking', worker_id=worker_id))
 
 
 
@@ -1143,43 +1221,106 @@ def book_worker(worker_id):
 #
 #     '''
 
+@app.route('/waiting_for_payment/<int:booking_id>')
+@login_required
+def waiting_for_payment(booking_id):
+    from datetime import datetime
+    booking = Booking.query.get_or_404(booking_id)
+
+    if current_user.id != booking.worker_id:
+        abort(403)
+
+    remaining = max(0, int((booking.expires_at - datetime.utcnow()).total_seconds()))
+    return render_template('waiting_payment.html', booking=booking, time_left=remaining)
+
+
+
 
 @app.route('/respond_notification/<int:notification_id>', methods=['POST'])
 @login_required
 def respond_notification(notification_id):
-    notif = Notification.query.get_or_404(notification_id)
 
+    notif = Notification.query.get_or_404(notification_id)
     if notif.recipient_id != current_user.id:
         return "Unauthorized", 403
 
-    response = request.form.get('response')  # 'Accept' or 'Reject'
-    response = response.capitalize()
+    response = request.form.get('response', '').capitalize()
+    if response not in ['Accept', 'Reject']:
+        return "Invalid response", 400
 
-    # ✅ Update the original notification for the job seeker
-    if notif.sender:
-        notif.message = f"You have {response.lower()}ed {notif.sender.name}'s job request."
-    else:
-        notif.message = f"You have {response.lower()}ed a job request."
+    booking = Booking.query.get(notif.booking_id)
+    if not booking or booking.status != 'Pending':
+        return "Booking not found or already handled", 404
 
-    notif.action_type = response.lower()
-    notif.is_read = True
+    if response == 'Accept':
+        booking.status = 'Accepted'
+        booking.expires_at = datetime.utcnow() + timedelta(minutes=10)
 
-    # ✅ NEW: Notify the original sender (job giver) about the response
-    if notif.sender_id:
-        response_notif = Notification(
-            recipient_id=notif.sender_id,
-            sender_id=current_user.id,
-            message=f"{current_user.name} has {response.lower()}ed your job request.",
-            job_id=notif.job_id,
-            action_type=response.lower()
-        )
-        db.session.add(response_notif)
+        notif.message = f"You have accepted {notif.sender.name}'s job request." if notif.sender else "You have accepted a job request."
+        notif.action_type = 'accepted'
+        notif.is_read = True
 
-    db.session.commit()
+        # 🔔 Notify job giver with redirect instruction
+        if notif.sender_id:
+            notify_back = Notification(
+                recipient_id=notif.sender_id,
+                sender_id=current_user.id,
+                job_id=notif.job_id,
+                booking_id=booking.id,
+                message=f"{current_user.name} has accepted your job request. Please pay the token within 10 minutes.",
+                action_type='payment_required'
+            )
+            db.session.add(notify_back)
 
-    return f'''
-        <p>You have {response.lower()}ed the request.</p>
-    '''
+        db.session.commit()
+
+        # ✅ Redirect job seeker to wait screen
+        return redirect(url_for('waiting_for_payment', booking_id=booking.id))
+
+    elif response == 'Reject':
+        booking.status = 'Rejected'
+        notif.message = f"You have rejected {notif.sender.name}'s job request." if notif.sender else "You have rejected a job request."
+        notif.action_type = 'rejected'
+        notif.is_read = True
+
+        if notif.sender_id:
+            notify_back = Notification(
+                recipient_id=notif.sender_id,
+                sender_id=current_user.id,
+                job_id=notif.job_id,
+                booking_id=booking.id,
+                message=f"{current_user.name} has rejected your job request.",
+                action_type='rejected'
+            )
+            db.session.add(notify_back)
+
+        db.session.commit()
+        return redirect(url_for('notifications'))
+
+    return "Unhandled case", 500
+
+
+
+
+@app.route('/pay_token/<int:booking_id>', methods=['GET', 'POST'])
+@login_required
+def pay_token(booking_id):
+    booking = Booking.query.get_or_404(booking_id)
+    if current_user.id != booking.provider_id:
+        return "Unauthorized", 403
+
+    if request.method == 'POST':
+        # 💳 Placeholder for payment logic
+        booking.status = 'Token Paid'
+        db.session.commit()
+        flash("Token payment completed and on hold until job completion.")
+        return redirect(url_for('welcome'))
+
+    # Remaining time logic
+    from datetime import datetime
+    remaining = max(0, int((booking.expires_at - datetime.utcnow()).total_seconds()))
+    return render_template("pay_token.html", booking=booking, time_left=remaining)
+
 
 @app.route('/seek_job')
 @login_required
@@ -1391,9 +1532,9 @@ def seek_job():
     '''
 
 
-def generate_unique_worker_id():
-    custom_id = WorkerProfile.query.count() + 1
+import random
 
+def generate_unique_worker_id():
     def is_valid(id_str):
         # Reject if 4 or more repeating digits
         for digit in set(id_str):
@@ -1411,17 +1552,18 @@ def generate_unique_worker_id():
         if not is_valid(worker_id_str):
             continue
 
-        if not WorkerProfile.query.filter_by(user_id=worker_id).first():
-            return worker_id
+        if not WorkerProfile.query.filter_by(worker_code=worker_id_str).first():
+            return worker_id_str  # Return as string to match DB type
 
-    # fallback: increase to 9 digits
+    # Fallback
     digits += 1
     while True:
         worker_id = random.randint(10**(digits-1), 10**digits - 1)
         worker_id_str = str(worker_id)
 
-        if is_valid(worker_id_str) and not WorkerProfile.query.filter_by(user_id=worker_id).first():
-            return worker_id
+        if is_valid(worker_id_str) and not WorkerProfile.query.filter_by(worker_code=worker_id_str).first():
+            return worker_id_str
+
 
 @app.route('/create_worker_profile', methods=['GET', 'POST'])
 @login_required
@@ -1467,14 +1609,17 @@ def create_worker_profile():
         )
         db.session.add(new_profile)
 
-        skills = request.form.getlist('skills')
-        rates = request.form.getlist('rates')
-        for skill_name, rate in zip(skills, rates):
+        skills = request.form.getlist('skills[]')
+        rates = request.form.getlist('rates[]')
+        rate_types = request.form.getlist('rate_types[]')
+
+        for skill_name, rate, rate_type in zip(skills, rates, rate_types):
             if skill_name.strip() == '' or rate.strip() == '':
                 continue
             skill = Skill(
                 name=skill_name.strip().lower(),
                 rate=rate.strip(),
+                rate_type=rate_type.strip(),
                 location=full_location.strip(),
                 user_id=current_user.id
             )
@@ -1484,6 +1629,7 @@ def create_worker_profile():
         flash("Profile created successfully.")
         return redirect(url_for('seek_job'))
 
+    # HTML Page
     return '''
     <!DOCTYPE html>
     <html lang="en">
@@ -1517,13 +1663,36 @@ def create_worker_profile():
                 transform: scale(1.03);
             }
             .skill-row {
-                display: flex;
-                gap: 10px;
-                margin-top: 10px;
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+            align-items: center;
+            flex-wrap: nowrap;
             }
-            .btn-danger {
+
+            .skill-row .form-control,
+            .skill-row .form-select {
+            flex: 1 1 auto;
+            min-width: 0;
+            }
+
+            .skill-row .remove-btn {
+                padding: 6px 10px;
+                background-color: #dc3545;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                font-size: 14px;
                 white-space: nowrap;
+                cursor: pointer;
+                height: 38px;
             }
+
+            @media (max-width: 768px) {
+            .skill-row {
+            flex-wrap: wrap;
+            }
+        }
         </style>
     </head>
     <body>
@@ -1580,8 +1749,14 @@ def create_worker_profile():
                     <h5 class="mt-4 mb-2 text-primary">🔧 Skills & Rates</h5>
                     <div id="skills-section">
                         <div class="skill-row">
-                            <input type="text" class="form-control" name="skills" placeholder="Skill (e.g., Electrician)" required>
-                            <input type="number" class="form-control" name="rates" placeholder="Rate/hr (₹)" required>
+                            <input type="text" class="form-control" name="skills[]" placeholder="Skill (e.g., Electrician)" required>
+                            <input type="number" class="form-control" name="rates[]" placeholder="Rate (₹)" required>
+                            <select class="form-select" name="rate_types[]" required>
+                                <option value="per hour">₹/Hour</option>
+                                <option value="per job">₹/Job</option>
+                                <option value="per kilo">₹/Kilo</option>
+                                <option value="per kilometer">₹/Kilometer</option>
+                            </select>
                         </div>
                     </div>
                     <button type="button" class="btn btn-outline-secondary mt-2" onclick="addSkill()">➕ Add Skill</button>
@@ -1602,12 +1777,19 @@ def create_worker_profile():
                 const row = document.createElement('div');
                 row.className = 'skill-row';
                 row.innerHTML = `
-                    <input type="text" class="form-control" name="skills" placeholder="Skill" required>
-                    <input type="number" class="form-control" name="rates" placeholder="Rate/hr (₹)" required>
-                    <button type="button" class="btn btn-danger" onclick="this.parentElement.remove()">❌</button>
+                    <input type="text" class="form-control" name="skills[]" placeholder="Skill" required>
+                    <input type="number" class="form-control" name="rates[]" placeholder="Rate (₹)" required>
+                    <select class="form-select" name="rate_types[]" required>
+                        <option value="per hour">₹/Hour</option>
+                        <option value="per job">₹/Job</option>
+                        <option value="per kilo">₹/Kilo</option>
+                        <option value="per kilometer">₹/Kilometer</option>
+                    </select>
+                    <button type="button" class="btn btn-danger" onclick="this.parentElement.remove()">Remove</button>
                 `;
                 container.appendChild(row);
             }
+
 
             function loadPreview(event) {
                 const preview = document.getElementById('preview');
@@ -1618,6 +1800,7 @@ def create_worker_profile():
     </body>
     </html>
     '''
+
 
 
 @app.route('/edit_worker_profile', methods=['GET', 'POST'])
