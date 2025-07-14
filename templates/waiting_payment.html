@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Waiting for Payment</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial; text-align: center; padding: 50px; background: #f4f4f4; }
+        h2 { color: #007bff; }
+        #timer { font-size: 2em; color: #28a745; }
+    </style>
+</head>
+<body>
+    <h2>⏳ Waiting for Payment</h2>
+    <p>The job giver has <b id="timer">{{ time_left }}</b> seconds to pay the token.</p>
+    <p>If payment is made, you’ll receive a 6-digit OTP for confirmation.</p>
+
+    <script>
+        let seconds = {{ time_left }};
+        const timer = document.getElementById('timer');
+        const interval = setInterval(() => {
+            seconds -= 1;
+            if (seconds <= 0) {
+                clearInterval(interval);
+                timer.innerText = "Time expired";
+            } else {
+                timer.innerText = seconds;
+            }
+        }, 1000);
+    </script>
+</body>
+</html>
