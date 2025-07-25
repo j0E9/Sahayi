@@ -1,4 +1,4 @@
-from flask import Flask, request, redirect, url_for, render_template_string, session, flash,render_template,jsonify
+from flask import Flask, request, redirect, url_for, render_template_string, session, flash,render_template,jsonify,make_response
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user, UserMixin
 from geopy.distance import geodesic
@@ -9,6 +9,8 @@ from datetime import datetime,timedelta
 import requests
 from geopy.geocoders import Nominatim
 from werkzeug.utils import secure_filename
+from sqlalchemy import func
+
 
 app = Flask(__name__)
 app.secret_key = 'AJDB775DA@#$TBhsYT@#&^FVDAD^&2'
@@ -113,11 +115,17 @@ class Booking(db.Model):
     rate = db.Column(db.Float)
     rate_type = db.Column(db.String(20))
     quantity = db.Column(db.Float)
+    skill_name = db.Column(db.String(100))
     expires_at = db.Column(db.DateTime)
     job = db.relationship('Job', backref='bookings')
     provider = db.relationship('User', foreign_keys=[provider_id])
     worker = db.relationship('User', foreign_keys=[worker_id])
-
+    popup_shown_to_worker = db.Column(db.Boolean, default=False)
+    popup_shown_to_provider = db.Column(db.Boolean, default=False)
+    otp_code = db.Column(db.String(6))
+    otp_verified = db.Column(db.Boolean, default=False)
+    otp_verified_time = db.Column(db.DateTime)  # store when OTP was verified
+    job_duration_minutes = db.Column(db.Integer)  # or store it in seconds/hours
 
 
 class Notification(db.Model):
@@ -186,80 +194,131 @@ def home():
     <!DOCTYPE html>
     <html lang="en">
     <head>
-        <title>Job Connect</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-        <style>
-            body {
-                margin: 0;
-                padding: 0;
-                min-height: 100vh;
-                background: linear-gradient(135deg, #6e8efb, #a777e3);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                font-family: 'Segoe UI', sans-serif;
-                animation: fadeIn 1s ease-in;
-            }
+      <title>Sahayi • Connect with Skilled Workers</title>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <script src="https://cdn.jsdelivr.net/npm/particles.js"></script>
+      <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+      <style>
+        html, body {
+            margin: 0; padding: 0;
+            width: 100%; height: 100%;
+            font-family: 'Segoe UI', sans-serif;
+            overflow: hidden;
+        }
+        #particles-js {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #f3e5f5, #e0f7fa);
+            z-index: -1;
+        }
+        .landing {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            flex-direction: column;
+            text-align: center;
+            color: #333;
+            padding: 20px;
+        }
+        .title {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: #333;
+            letter-spacing: 3px;
+            word-break: break-word;
+        }
+        .title i {
+            color: #ff6f61;
+            animation: spin 6s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0); }
+            100% { transform: rotate(360deg); }
+        }
+        .subtitle {
+            font-size: 1.1rem;
+            margin-top: 12px;
+            margin-bottom: 25px;
+            color: #444;
+        }
+        .btn-wrap {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .btn-custom {
+            padding: 12px 20px;
+            font-size: 1rem;
+            border-radius: 8px;
+            text-transform: uppercase;
+            transition: all 0.3s ease;
+        }
+        .btn-custom:hover {
+            transform: scale(1.05);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
+        }
+        .btn-hire {
+            background-color: #007bff;
+            color: white;
+            border: none;
+        }
+        .btn-work {
+            background: transparent;
+            color: #ff6f61;
+            border: 2px solid #ff6f61;
+        }
+        .btn-work:hover {
+            background-color: #ff6f61;
+            color: white;
+        }
 
-            @keyframes fadeIn {
-                from { opacity: 0; transform: translateY(20px); }
-                to { opacity: 1; transform: translateY(0); }
+        /* Mobile Responsiveness */
+        @media (max-width: 576px) {
+            .title {
+                font-size: 2rem;
+                letter-spacing: 1px;
             }
-
-            .card {
-                background: rgba(255, 255, 255, 0.95);
-                border-radius: 20px;
-                padding: 40px 30px;
-                max-width: 420px;
+            .subtitle {
+                font-size: 1rem;
+                padding: 0 10px;
+            }
+            .btn-custom {
                 width: 100%;
-                box-shadow: 0 8px 25px rgba(0,0,0,0.2);
-                text-align: center;
+                padding: 10px;
+                font-size: 0.95rem;
             }
-
-            .card h2 {
-                font-size: 28px;
-                font-weight: bold;
-                margin-bottom: 20px;
+            .btn-wrap {
+                flex-direction: column;
+                gap: 12px;
+                width: 100%;
+                padding: 0 20px;
             }
-
-            .card h2 span {
-                color: #6f42c1;
-            }
-
-            .btn-lg {
-                padding: 12px 20px;
-                font-size: 18px;
-                border-radius: 10px;
-                margin-top: 15px;
-            }
-
-            .btn i {
-                margin-right: 8px;
-            }
-
-            .btn-outline-primary:hover {
-                background-color: #6f42c1;
-                color: #fff;
-                border-color: #6f42c1;
-            }
-        </style>
+        }
+      </style>
     </head>
     <body>
-        <div class="card">
-            <h2>Welcome to <span>Sahayi</span></h2>
-            <p class="text-muted mb-4">Find jobs. Offer skills. Build your future.</p>
-            <a href="/login" class="btn btn-primary btn-lg w-100">
-                <i class="fas fa-sign-in-alt"></i> Login
-            </a>
-            <a href="/sign_up" class="btn btn-outline-primary btn-lg w-100">
-                <i class="fas fa-user-plus"></i> Sign Up
-            </a>
+      <div id="particles-js"></div>
+      <div class="landing">
+        <div class="title">
+          <i class="fas fa-screwdriver-wrench"></i> S A H A Y I <i class="fas fa-wrench"></i>
         </div>
+        <div class="subtitle">Find trusted workers. Offer your skills. Build the future together.</div>
+        <div class="btn-wrap">
+          <a href="/login" class="btn btn-hire btn-custom"><i class="fas fa-sign-in-alt"></i> Login</a>
+          <a href="/sign_up" class="btn btn-work btn-custom"><i class="fas fa-user-plus"></i> Sign Up</a>
+        </div>
+      </div>
     </body>
     </html>
     '''
+
+
 
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -279,7 +338,8 @@ def login():
     <!DOCTYPE html>
     <html lang="en">
     <head>
-        <title>Login - Job Connect</title>
+        <title>Login - Sahayi</title>
+        <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -288,65 +348,92 @@ def login():
                 margin: 0;
                 padding: 0;
                 height: 100vh;
-                background: linear-gradient(135deg, #6e8efb, #a777e3);
+                font-family: 'Segoe UI', sans-serif;
                 display: flex;
                 justify-content: center;
                 align-items: center;
-                font-family: 'Segoe UI', sans-serif;
-                animation: fadeIn 1s ease-in;
+                background: linear-gradient(135deg, #263d61, #43cea2);
+                position: relative;
+                overflow: hidden;
             }
 
-            @keyframes fadeIn {
-                from { opacity: 0; transform: translateY(20px); }
-                to { opacity: 1; transform: translateY(0); }
+            .floating-icons i {
+                position: absolute;
+                font-size: 90px;
+                color: rgba(255, 255, 255, 0.04);
+                animation: spin 40s linear infinite;
+            }
+
+            .floating-icons i:nth-child(1) { top: 20%; left: 5%; }
+            .floating-icons i:nth-child(2) { top: 70%; left: 20%; }
+            .floating-icons i:nth-child(3) { top: 40%; left: 75%; }
+            .floating-icons i:nth-child(4) { top: 80%; left: 85%; }
+
+            @keyframes spin {
+                0% { transform: rotate(0); }
+                100% { transform: rotate(360deg); }
             }
 
             .login-box {
                 background: rgba(255, 255, 255, 0.95);
-                padding: 40px 30px;
+                padding: 40px;
                 border-radius: 20px;
-                box-shadow: 0 8px 25px rgba(0,0,0,0.2);
-                width: 100%;
+                box-shadow: 0 10px 25px rgba(0,0,0,0.25);
                 max-width: 420px;
+                width: 90%;
+                z-index: 10;
                 text-align: center;
+                position: relative;
+                border-left: 10px solid #007bff;
             }
 
             .login-box h2 {
-                font-weight: 700;
-                font-size: 26px;
+                font-weight: 800;
+                font-size: 28px;
                 margin-bottom: 25px;
+                color: #007bff;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 10px;
             }
 
-            .form-label {
-                font-weight: 500;
+            .login-box h2 i {
+                color: #f39c12;
             }
 
             .form-control {
-                padding-left: 40px;
                 border-radius: 10px;
+                padding: 14px;
+                font-size: 16px;
             }
 
-            .input-group-text {
-                background-color: #e9ecef;
-                border-radius: 10px 0 0 10px;
+            .btn-login {
+                background-color: #007bff;
+                color: white;
                 border: none;
-            }
-
-            .btn-primary {
                 padding: 12px;
                 font-size: 18px;
+                font-weight: 600;
                 border-radius: 10px;
-                font-weight: 500;
+                margin-top: 10px;
+                transition: 0.3s;
             }
 
-            .btn-primary:hover {
-                background-color: #5936b4;
-                border-color: #5936b4;
+            .btn-login:hover {
+                background-color: #0056b3;
+            }
+
+            .text-muted {
+                margin-top: 20px;
+                font-size: 14px;
+                color: #555;
             }
 
             .text-muted a {
-                color: #6f42c1;
+                color: #007bff;
                 text-decoration: none;
+                font-weight: 500;
             }
 
             .text-muted a:hover {
@@ -355,17 +442,23 @@ def login():
         </style>
     </head>
     <body>
+        <div class="floating-icons">
+            <i class="fas fa-gear"></i>
+            <i class="fas fa-wrench"></i>
+            <i class="fas fa-hammer"></i>
+            <i class="fas fa-screwdriver"></i>
+        </div>
+
         <div class="login-box">
-            <h2>Login to <span class="text-primary">Sahayi</span></h2>
+            <h2><i class="fas fa-toolbox"></i> Login to Sahayi</h2>
             <form method="POST">
-                <div class="mb-4 input-group">
-                    <span class="input-group-text"><i class="fas fa-envelope"></i></span>
-                    <input type="email" class="form-control" id="email" name="email" placeholder="Enter email" required>
+                <div class="mb-4">
+                    <input type="email" name="email" class="form-control" placeholder="Enter your email" required>
                 </div>
-                <button type="submit" class="btn btn-primary w-100">Login</button>
+                <button type="submit" class="btn btn-login w-100"><i class="fas fa-sign-in-alt me-2"></i> Login</button>
             </form>
-            <div class="text-muted mt-4">
-                Don't have an account? <a href="/sign_up">Sign Up</a>
+            <div class="text-muted">
+                Don't have an account? <a href="/sign_up">Create one</a>
             </div>
         </div>
     </body>
@@ -395,97 +488,158 @@ def sign_up():
     <!DOCTYPE html>
     <html lang="en">
     <head>
-        <title>Sign Up - Job Connect</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Join Sahayi • The Skill Network</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
         <style>
-            body {
+            * {
                 margin: 0;
                 padding: 0;
+                box-sizing: border-box;
+            }
+
+            body {
+                background: linear-gradient(135deg, #1f4037, #99f2c8);
                 height: 100vh;
-                background: linear-gradient(135deg, #43cea2, #185a9d);
+                font-family: 'Segoe UI', sans-serif;
                 display: flex;
                 justify-content: center;
                 align-items: center;
-                font-family: 'Segoe UI', sans-serif;
-                animation: fadeIn 1s ease-in;
+                overflow: hidden;
+                position: relative;
             }
 
-            @keyframes fadeIn {
-                from { opacity: 0; transform: translateY(20px); }
-                to { opacity: 1; transform: translateY(0); }
-            }
-
-            .signup-box {
-                background: rgba(255, 255, 255, 0.95);
-                padding: 40px 30px;
-                border-radius: 20px;
-                box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+            /* Toolbox floating background */
+            .background-icons {
+                position: absolute;
                 width: 100%;
-                max-width: 420px;
-                text-align: center;
+                height: 100%;
+                z-index: 1;
+                overflow: hidden;
             }
 
-            .signup-box h2 {
-                font-weight: 700;
+            .background-icons i {
+                position: absolute;
+                font-size: 80px;
+                color: rgba(255, 255, 255, 0.05);
+                animation: rotate 30s linear infinite;
+            }
+
+            .background-icons i:nth-child(1) { top: 20%; left: 10%; }
+            .background-icons i:nth-child(2) { top: 60%; left: 30%; }
+            .background-icons i:nth-child(3) { top: 10%; left: 70%; }
+            .background-icons i:nth-child(4) { top: 80%; left: 80%; }
+
+            @keyframes rotate {
+                0% { transform: rotate(0); }
+                100% { transform: rotate(360deg); }
+            }
+
+            .form-container {
+                background: rgba(255, 255, 255, 0.9);
+                padding: 40px;
+                border-radius: 30px;
+                box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+                z-index: 2;
+                width: 90%;
+                max-width: 480px;
+                position: relative;
+                border-left: 10px solid #007bff;
+            }
+
+            .form-container h2 {
+                font-weight: 800;
+                text-transform: uppercase;
                 font-size: 26px;
+                color: #007bff;
+                margin-bottom: 15px;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+
+            .form-container h2 i {
+                color: #f39c12;
+            }
+
+            .form-container p {
+                font-size: 14px;
+                color: #555;
                 margin-bottom: 25px;
             }
 
-            .form-label {
-                font-weight: 500;
-            }
-
             .form-control {
-                padding-left: 40px;
                 border-radius: 10px;
+                padding: 14px;
+                font-size: 16px;
             }
 
-            .input-group-text {
-                background-color: #e9ecef;
-                border-radius: 10px 0 0 10px;
+            .btn-custom {
+                background: #007bff;
+                color: white;
                 border: none;
+                border-radius: 10px;
+                padding: 14px;
+                font-size: 17px;
+                font-weight: 600;
+                transition: background 0.3s ease;
             }
 
-            .btn-success {
-                padding: 12px;
-                font-size: 18px;
-                border-radius: 10px;
+            .btn-custom:hover {
+                background: #0056b3;
+            }
+
+            .alt-link {
+                margin-top: 20px;
+                font-size: 14px;
+                color: #333;
+            }
+
+            .alt-link a {
+                color: #007bff;
+                text-decoration: none;
                 font-weight: 500;
             }
 
-            .btn-success:hover {
-                background-color: #117a65;
-                border-color: #117a65;
-            }
-
-            .text-muted a {
-                color: #1e3799;
-                text-decoration: none;
-            }
-
-            .text-muted a:hover {
+            .alt-link a:hover {
                 text-decoration: underline;
             }
+
+            .gear-svg {
+                position: absolute;
+                bottom: -30px;
+                right: -30px;
+                width: 120px;
+                opacity: 0.1;
+                z-index: 0;
+            }
+
         </style>
     </head>
     <body>
-        <div class="signup-box">
-            <h2>Sign Up for <span class="text-primary">Sahayi</span></h2>
+        <div class="background-icons">
+            <i class="fas fa-wrench"></i>
+            <i class="fas fa-hammer"></i>
+            <i class="fas fa-gear"></i>
+            <i class="fas fa-screwdriver"></i>
+        </div>
+
+        <div class="form-container">
+            <h2><i class="fas fa-hard-hat"></i> Join Sahayi</h2>
+            <p>Register now to connect with real work opportunities or offer your skills.</p>
             <form method="POST">
-                <div class="mb-4 input-group">
-                    <span class="input-group-text"><i class="fas fa-envelope"></i></span>
-                    <input type="email" class="form-control" id="email" name="email" placeholder="Email address" required>
+                <div class="mb-3">
+                    <input type="email" name="email" class="form-control" placeholder="Email address" required>
                 </div>
-                <div class="mb-4 input-group">
-                    <span class="input-group-text"><i class="fas fa-user"></i></span>
-                    <input type="text" class="form-control" id="name" name="name" placeholder="Full Name" required>
+                <div class="mb-3">
+                    <input type="text" name="name" class="form-control" placeholder="Full Name" required>
                 </div>
-                <button type="submit" class="btn btn-success w-100">Sign Up</button>
+                <button type="submit" class="btn btn-custom w-100"><i class="fas fa-user-check me-2"></i> Sign Up</button>
             </form>
-            <div class="text-muted mt-4">
-                Already have an account? <a href="/login">Login</a>
+            <div class="alt-link">
+                Already registered? <a href="/login">Login here</a>
             </div>
         </div>
     </body>
@@ -496,36 +650,61 @@ def sign_up():
 
 @app.route('/get_location_details', methods=['POST'])
 def get_location_details():
-    data = request.get_json()
-    latitude = data.get('latitude')
-    longitude = data.get('longitude')
+    try:
+        data = request.get_json()
+        latitude = data.get('latitude')
+        longitude = data.get('longitude')
 
-    url = f"https://nominatim.openstreetmap.org/reverse?lat={latitude}&lon={longitude}&format=json"
-    headers = {'User-Agent': 'JobConnectApp/1.0'}
-    response = requests.get(url, headers=headers).json()
+        if latitude is None or longitude is None:
+            return jsonify({"error": "Missing coordinates"}), 400
 
-    print(response)  # Debugging the response from OpenStreetMap
+        url = f"https://nominatim.openstreetmap.org/reverse?lat={latitude}&lon={longitude}&format=json"
+        headers = {'User-Agent': 'JobConnectApp/1.0'}
+        response = requests.get(url, headers=headers, timeout=5)
+        response.raise_for_status()  # raises error if bad response
 
-    address = response.get('address', {})
-    state = address.get('state', 'Unknown')
-    zipcode = address.get('postcode', 'Unknown')
+        data = response.json()
+        address = data.get('address', {})
+        state = address.get('state', 'Unknown')
+        zipcode = address.get('postcode', 'Unknown')
 
-    return jsonify({
-        'state': state,
-        'zipcode': zipcode
-    })
+        return jsonify({'state': state, 'zipcode': zipcode})
+
+    except Exception as e:
+        print("Error in /get_location_details:", e)
+        return jsonify({"state": "Unknown", "zipcode": "Unknown"}), 503
+
 
 @app.route('/update_location', methods=['POST'])
 @login_required
 def update_location():
     data = request.get_json()
-    current_user.state = data.get('state', 'Unknown')
-    current_user.zipcode = data.get('zipcode', 'Unknown')
-    current_user.latitude = data.get('latitude')
-    current_user.longitude = data.get('longitude')
-    current_user.location_last_updated = datetime.utcnow()
+    current_user.latitude = data.get("latitude")
+    current_user.longitude = data.get("longitude")
+    current_user.state = data.get("state")
+    current_user.zipcode = data.get("zipcode")
     db.session.commit()
-    return jsonify({'status': 'success'})
+    return jsonify({"status": "success"})
+
+
+
+@app.route('/check_job_alert')
+@login_required
+def check_job_alert():
+    note = Notification.query.filter_by(
+        recipient_id=current_user.id,
+        is_read=False,
+        action_type='booking_request'
+    ).order_by(Notification.timestamp.desc()).first()
+
+    if note:
+        return jsonify({
+            "has_new_request": True,
+            "sender": note.sender.name if note.sender else "someone"
+        })
+    else:
+        return jsonify({"has_new_request": False})
+
 
 @app.route('/welcome')
 @login_required
@@ -536,7 +715,6 @@ def welcome():
 
 
     return render_template("verify_otp.html")
-
 
 
 @app.route('/provide_job', methods=['GET', 'POST'])
@@ -562,7 +740,7 @@ def provide_job():
 
         job_keywords = set(job_type.split())
         skills = Skill.query.all()
-        matched_workers = {}  # Track first matched skill per worker
+        matched_workers = {}
 
         for skill in skills:
             skill_words = set(skill.name.strip().lower().split())
@@ -579,6 +757,7 @@ def provide_job():
                 if distance_km <= 15 and worker_user.id not in matched_workers:
                     matched_workers[worker_user.id] = {
                         "user": worker_user,
+                        "skill_id": skill.id,
                         "skill_name": skill.name,
                         "rate": skill.rate,
                         "rate_type": skill.rate_type,
@@ -597,123 +776,141 @@ def provide_job():
                             <b>Rate:</b> ₹{data["rate"]} / {data["rate_type"]}<br>
                             <b>Distance:</b> {data["distance"]} km
                         </p>
-                        <a href="/worker/{data["user"].id}?job_id={job.id}&skill={data["skill_name"]}" class="btn btn-primary">View Profile</a>
+                        <a href="/worker/{data["user"].id}?job_id={job.id}&skill_id={data["skill_id"]}" class="btn btn-primary w-100">👤 View Profile</a>
                     </div>
                 </div>
             </div>
             '''
 
-        if not matched_list:
-            matched_list = "<p>No matching workers found within 15 km radius.</p>"
-
         return f'''
-        <!doctype html>
+        <!DOCTYPE html>
         <html lang="en">
         <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>Matching Workers</title>
-          <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-          <style>
-            body {{
-                font-family: Arial, sans-serif;
-                background-color: #f8f9fa;
-                padding: 20px;
-            }}
-          </style>
+            <meta charset="UTF-8">
+            <title>Matching Workers</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+            <style>
+                body {{
+                    background-color: #f2f2f2;
+                    font-family: 'Segoe UI', sans-serif;
+                }}
+                .card:hover {{
+                    transform: scale(1.02);
+                    box-shadow: 0 8px 16px rgba(0,0,0,0.1);
+                    transition: all 0.3s ease-in-out;
+                }}
+                .title-banner {{
+                    background: linear-gradient(135deg, #007bff, #00c6ff);
+                    color: white;
+                    padding: 30px;
+                    text-align: center;
+                    border-radius: 0 0 12px 12px;
+                }}
+                .title-banner h2 {{
+                    font-size: 28px;
+                    margin-bottom: 10px;
+                }}
+                .title-banner p {{
+                    font-size: 18px;
+                    margin-bottom: 0;
+                }}
+            </style>
         </head>
         <body>
-          <div class="container">
-            <div class="mb-4">
-                <p>🔍 You searched for: <b>{job_type}</b></p>
-                <h4 class="mt-4">Matching Workers near your location:</h4>
+            <div class="title-banner">
+                <h2>🔍 You searched for: <b>{job_type.title()}</b></h2>
+                <p>Here are matching workers near you</p>
             </div>
-            <div class="row">
-                {matched_list}
+
+            <div class="container mt-4">
+                <div class="row">
+                    {matched_list or "<div class='col-12'><div class='alert alert-warning text-center'>😞 No matching workers found within 15 km radius.</div></div>"}
+                </div>
+                <div class="text-center mt-4">
+                    <a href="/provide_job" class="btn btn-outline-primary">🔄 Start a New Search</a>
+                </div>
             </div>
-          </div>
         </body>
         </html>
         '''
 
-    # GET method: render form
+    # GET method
     skills = Skill.query.all()
     skill_names = [skill.name.strip().lower() for skill in skills]
 
     return render_template_string('''
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <title>Search for Sahayi</title>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <style>
-                body {
-                    font-family: Arial, sans-serif;
-                    padding: 20px;
-                    margin: 0;
-                    background-color: #f2f2f2;
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <title>Search for Sahayi</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                padding: 20px;
+                margin: 0;
+                background-color: #f2f2f2;
+            }
+            .form-container {
+                max-width: 600px;
+                margin: auto;
+                background: white;
+                padding: 30px;
+                border-radius: 10px;
+                box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            }
+            label {
+                font-weight: bold;
+                margin-bottom: 5px;
+                display: block;
+            }
+            input[type="text"] {
+                width: 100%;
+                padding: 10px;
+                margin-top: 5px;
+                margin-bottom: 20px;
+                border: 1px solid #ccc;
+                border-radius: 5px;
+                box-sizing: border-box;
+            }
+            input[type="submit"] {
+                background-color: #007bff;
+                color: white;
+                padding: 10px 20px;
+                border: none;
+                border-radius: 5px;
+                cursor: pointer;
+                width: 100%;
+            }
+            input[type="submit"]:hover {
+                background-color: #0056b3;
+            }
+            @media (max-width: 600px) {
+                input, label {
+                    font-size: 16px;
                 }
-                .form-container {
-                    max-width: 600px;
-                    margin: auto;
-                    background: white;
-                    padding: 30px;
-                    border-radius: 10px;
-                    box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-                }
-                label {
-                    font-weight: bold;
-                    margin-bottom: 5px;
-                    display: block;
-                }
-                input[type="text"] {
-                    width: 100%;
-                    padding: 10px;
-                    margin-top: 5px;
-                    margin-bottom: 20px;
-                    border: 1px solid #ccc;
-                    border-radius: 5px;
-                    box-sizing: border-box;
-                }
-                input[type="submit"] {
-                    background-color: #007bff;
-                    color: white;
-                    padding: 10px 20px;
-                    border: none;
-                    border-radius: 5px;
-                    cursor: pointer;
-                    width: 100%;
-                }
-                input[type="submit"]:hover {
-                    background-color: #0056b3;
-                }
-                @media (max-width: 600px) {
-                    input, label {
-                        font-size: 16px;
-                    }
-                }
-            </style>
-        </head>
-        <body>
-            <div class="form-container">
-                <h2 class="text-center">🔍 Search for Sahayi</h2>
-                <form method='POST'>
-                    <label for="job_type">What help do you need?</label>
-                    <input type='text' name='job_type' id='job_type' list='job-type-list' placeholder="e.g., plumber, electrician" required>
-
-                    <datalist id='job-type-list'>
-                        {% for skill in skill_names %}
-                            <option value="{{ skill }}">
-                        {% endfor %}
-                    </datalist>
-
-                    <input type='submit' value='Search Workers Near You'>
-                </form>
-            </div>
-        </body>
-        </html>
+            }
+        </style>
+    </head>
+    <body>
+        <div class="form-container">
+            <h2 class="text-center">🔍 Search for Sahayi</h2>
+            <form method='POST'>
+                <label for="job_type">What help do you need?</label>
+                <input type='text' name='job_type' id='job_type' list='job-type-list' placeholder="e.g., plumber, electrician" required>
+                <datalist id='job-type-list'>
+                    {% for skill in skill_names %}
+                        <option value="{{ skill }}">
+                    {% endfor %}
+                </datalist>
+                <input type='submit' value='Search Workers Near You'>
+            </form>
+        </div>
+    </body>
+    </html>
     ''', skill_names=skill_names)
-
 
 def generate_unique_token():
     while True:
@@ -726,20 +923,52 @@ def generate_unique_token():
 @login_required
 def confirm_booking(worker_id):
     from datetime import datetime
+    from geopy.distance import geodesic
+
     worker = User.query.get_or_404(worker_id)
     skills = Skill.query.filter_by(user_id=worker.id).all()
 
+    selected_skill = None
+
+    # Try skill_id first
+    skill_id = request.args.get("skill_id", type=int)
+    if skill_id:
+        selected_skill = Skill.query.get(skill_id)
+        if not selected_skill or selected_skill.user_id != worker.id:
+            selected_skill = None  # fallback if not matched
+
+    # Then try skill name from ?skill=python
+    if not selected_skill:
+        skill_name = request.args.get("skill")
+        if skill_name:
+            selected_skill = Skill.query.filter(
+                Skill.user_id == worker.id,
+                func.lower(func.trim(Skill.name)) == skill_name.lower().strip()
+            ).first()
+
+    # Final fallback to first skill
+    if not selected_skill and skills:
+        selected_skill = skills[0]
+
     if request.method == 'POST':
         description = request.form['description']
-        skill_name = request.form['skill']
-        rate_type = request.form['rate_type']
-        quantity = request.form.get('quantity')
         job_id = request.args.get("job_id")
+        skill_id = int(request.form['skill_id'])
 
-        if not quantity or float(quantity) <= 0:
+        skill = Skill.query.get(skill_id)
+        if not skill or skill.user_id != worker.id:
+            return jsonify({"error": "Invalid skill selected"}), 400
+
+        # Handle quantity based on rate_type
+        if skill.rate_type == "per hour":
+            hours = float(request.form.get("hours", 0))
+            minutes = float(request.form.get("minutes", 0))
+            quantity = hours + (minutes / 60)
+        else:
+            quantity = float(request.form.get("quantity", 0))
+
+        if quantity <= 0:
             return jsonify({"error": "Invalid quantity"}), 400
-
-        skill = Skill.query.filter_by(user_id=worker.id, name=skill_name.lower().strip()).first()
 
         booking = Booking(
             token=generate_unique_token(),
@@ -747,15 +976,15 @@ def confirm_booking(worker_id):
             provider_id=current_user.id,
             job_id=job_id,
             status='Pending',
-            rate=float(skill.rate),  # ✅ save rate
-            rate_type=skill.rate_type,  # ✅ save rate_type
-            quantity=float(quantity)  # ✅ save quantity
+            rate=float(skill.rate),
+            rate_type=skill.rate_type,
+            quantity=quantity,
+            skill_name=skill.name
         )
 
         db.session.add(booking)
         db.session.flush()
 
-        from geopy.distance import geodesic
         try:
             distance_km = round(
                 geodesic((current_user.latitude, current_user.longitude),
@@ -765,21 +994,23 @@ def confirm_booking(worker_id):
         except:
             distance_km = "Unknown"
 
-        rate_type_clean = rate_type.lower()
-        if "hour" in rate_type_clean:
-            quantity_text = f"{quantity} hour(s)"
-        elif "job" in rate_type_clean:
-            quantity_text = f"{quantity} job(s)"
-        elif "kilo" in rate_type_clean:
-            quantity_text = f"{quantity} kilo(s)"
-        elif "meter" in rate_type_clean:
-            quantity_text = f"{quantity} kilometer(s)"
+        # Format quantity nicely
+        if skill.rate_type == "per hour":
+            hrs = int(quantity)
+            mins = int((quantity - hrs) * 60)
+            parts = []
+            if hrs > 0:
+                parts.append(f"{hrs} hr{'s' if hrs != 1 else ''}")
+            if mins > 0 or hrs == 0:
+                parts.append(f"{mins} min{'s' if mins != 1 else ''}")
+            quantity_text = ' '.join(parts)
         else:
-            quantity_text = f"{quantity} {rate_type}"
+            unit = skill.rate_type.replace("per ", "")
+            quantity_text = f"{quantity} {unit}{'s' if quantity > 1 else ''}"
 
         message = f"""
         📢 <b>New booking request</b><br>
-        🧰 <b>Skill:</b> {skill_name.title()}<br>
+        🧰 <b>Skill:</b> {skill.name.title()}<br>
         🕒 <b>Requested:</b> {quantity_text}<br>
         📍 <b>Distance:</b> {distance_km} km<br>
         📝 <b>Job Description:</b> {description[:150]}
@@ -798,7 +1029,8 @@ def confirm_booking(worker_id):
 
         return jsonify({"redirect": "/welcome"})
 
-    return render_template("confirm_booking.html", worker=worker, skills=skills)
+    return render_template("confirm_booking.html", worker=worker, skills=skills, selected_skill=selected_skill)
+
 
 
 @app.route('/worker/<int:worker_id>', methods=['GET', 'POST'])
@@ -806,25 +1038,22 @@ def confirm_booking(worker_id):
 def view_worker(worker_id):
     user = User.query.get_or_404(worker_id)
     worker_profile = user.worker_profile
-    searched_skill_name = request.args.get("skill")
-    if searched_skill_name:
-        skills = Skill.query.filter_by(user_id=user.id, name=searched_skill_name.strip().lower()).all()
-    else:
-        skills = Skill.query.filter_by(user_id=user.id).all()
-
     showcase_images = ShowcaseImage.query.filter_by(user_id=user.id).order_by(ShowcaseImage.uploaded_at.desc()).all()
-    job_id = request.args.get('job_id')
     profile = WorkerProfile.query.filter_by(user_id=user.id).first()
+    job_id = request.args.get("job_id")
+    skill_id = request.args.get("skill_id", type=int)
 
-    message = ""
-    book_button = ""
-    rating_form = ""
+    # Find selected skill (fallback to first skill)
+    if skill_id:
+        selected_skill = Skill.query.get(skill_id)
+    else:
+        selected_skill = Skill.query.filter_by(user_id=user.id).first()
 
-    # Ratings
+    skills = Skill.query.filter_by(user_id=user.id).all()
     ratings = Rating.query.filter_by(worker_id=user.id).order_by(Rating.timestamp.desc()).all()
     avg_rating = round(sum(r.stars for r in ratings) / len(ratings), 1) if ratings else "No ratings yet"
 
-    # Submit new rating
+    # POST: Handle rating submission
     if request.method == 'POST' and current_user.id != user.id:
         stars = float(request.form.get("stars", 0))
         comment = request.form.get("comment", "")
@@ -832,256 +1061,23 @@ def view_worker(worker_id):
         db.session.add(new_rating)
         db.session.commit()
         flash("Rating submitted successfully!", "success")
-        return redirect(url_for("view_worker", worker_id=user.id, job_id=job_id))
+        return redirect(url_for("view_worker", worker_id=user.id, job_id=job_id, skill_id=skill_id))
 
-    # Booking logic
-    if current_user.id != user.id and job_id:
-        book_button = f"""
-        <form method="POST" action="/book_worker/{user.id}">
-            <input type="hidden" name="job_id" value="{job_id}">
-            <button type="submit" class="btn btn-primary mt-2">Book Worker</button>
-        </form>
-        """
-    elif current_user.id == user.id:
-        message = "<div class='alert alert-info'>You cannot book your own profile.</div>"
+    # Render template
+    return render_template("view_worker.html", user=user, skills=skills, ratings=ratings,
+                           avg_rating=avg_rating, worker_profile=worker_profile,
+                           showcase_images=showcase_images, profile=profile,
+                           selected_skill=selected_skill, job_id=job_id)
 
-    # Rating form (only for others, not the worker viewing their own profile)
-    if current_user.id != user.id:
-        rating_form = f"""
-        <h3>Leave a Rating</h3>
-        <style>
-            .star-rating {{
-                direction: rtl;
-                display: inline-block;
-                font-size: 30px;
-                unicode-bidi: bidi-override;
-            }}
-            .star-rating input[type="radio"] {{
-                display: none;
-            }}
-            .star-rating label {{
-                color: #ccc;
-                float: right;
-                padding: 0 5px;
-                cursor: pointer;
-            }}
-            .star-rating label:before {{
-                content: "\\2605";
-            }}
-            .star-rating label.half:before {{
-                content: "\\2605";
-                position: absolute;
-                margin-left: -15px;
-                width: 15px;
-                overflow: hidden;
-            }}
-            .star-rating input:checked ~ label,
-            .star-rating label:hover,
-            .star-rating label:hover ~ label {{
-                color: gold;
-            }}
-        </style>
-
-        <form method="POST">
-            <div class="star-rating">
-                <input type="radio" id="star5half" name="stars" value="5" /><label for="star5half" class="half" title="5 stars"></label>
-                <input type="radio" id="star5" name="stars" value="4.5" /><label for="star5" title="4.5 stars"></label>
-                <input type="radio" id="star4half" name="stars" value="4" /><label for="star4half" class="half" title="4 stars"></label>
-                <input type="radio" id="star4" name="stars" value="3.5" /><label for="star4" title="3.5 stars"></label>
-                <input type="radio" id="star3half" name="stars" value="3" /><label for="star3half" class="half" title="3 stars"></label>
-                <input type="radio" id="star3" name="stars" value="2.5" /><label for="star3" title="2.5 stars"></label>
-                <input type="radio" id="star2half" name="stars" value="2" /><label for="star2half" class="half" title="2 stars"></label>
-                <input type="radio" id="star2" name="stars" value="1.5" /><label for="star2" title="1.5 stars"></label>
-                <input type="radio" id="star1half" name="stars" value="1" /><label for="star1half" class="half" title="1 stars"></label>
-                <input type="radio" id="star1" name="stars" value=".5" /><label for="star1" title=".5 star"></label>
-            </div>
-            <br><br>
-            <label for="comment">Comment:</label><br>
-            <textarea name="comment" class="form-control" rows="4" placeholder="Write your feedback..." required></textarea><br><br>
-            <input type="submit" value="Submit Rating" class="btn btn-success">
-        </form>
-        """
-
-    rating_display = f"<h3>Average Rating: {avg_rating}</h3><ul>"
-    for r in ratings:
-        rater_name = r.rater.name if r.rater else "Unknown"
-        rating_display += f"<li><b>{r.stars} ★</b> by <i>{rater_name}</i> - {r.comment}</li>"
-    rating_display += "</ul>"
-    # Skills
-    skill_list = "<ul class='list-group'>" + "".join(
-        [f"<li class='list-group-item'>{s.name.title()} - ₹{s.rate} / {s.rate_type}</li>" for s in skills]) + "</ul>"
-
-    # Media showcase (carousel)
-    media_items = ""
-    media_indicators = ""
-    index = 0
-
-    if worker_profile:
-        # Handle photo if exists
-        if worker_profile.photo:
-            media_indicators += f'<button type="button" data-bs-target="#mediaModalCarousel" data-bs-slide-to="{index}" class="active" aria-current="true" aria-label="Photo"></button>'
-            media_items += f"""
-            <div class="carousel-item active">
-                <img src="/static/uploads/{worker_profile.photo}" class="d-block w-100 rounded" alt="Worker Photo">
-            </div>
-            """
-            index += 1
-        # Handle video if exists
-        if worker_profile.video:
-            media_indicators += f'<button type="button" data-bs-target="#mediaModalCarousel" data-bs-slide-to="{index}" aria-label="Video"></button>'
-            media_items += f"""
-            <div class="carousel-item">
-                <video class="d-block w-100 rounded" controls>
-                    <source src="/static/uploads/{worker_profile.video}" type="video/mp4">
-                    Your browser does not support the video tag.
-                </video>
-            </div>
-            """
-            index += 1
-    # Profile photo and gender
-    photo_url = f"/static/uploads/{profile.photo}" if profile.photo else "/static/default_profile.jpg"
-    gender = profile.gender or "Not specified"
-
-    # Showcase
-    showcase_items = ShowcaseImage.query.filter_by(user_id=user.id).all()
-    video_item = profile.video
-
-    photo_modals = ""
-    if showcase_items or video_item:
-        thumbnail = showcase_items[0].image_url if showcase_items else 'default.jpg'
-        thumbnail_html = f"""
-        <div>
-            <img src="/static/uploads/{thumbnail}" width="150" class="img-thumbnail" style="cursor:pointer;" data-bs-toggle="modal" data-bs-target="#carouselModal">
-        </div>
-        """
-
-        # Carousel items
-        carousel_items_html = ""
-        slide_index = 0
-        for img in showcase_items:
-            active = "active" if slide_index == 0 else ""
-            carousel_items_html += f"""
-            <div class="carousel-item {active}">
-                <img src="/static/uploads/{img.image_url}" class="d-block w-100 rounded" alt="Image {slide_index + 1}">
-            </div>
-            """
-            slide_index += 1
-
-        if video_item:
-            active = "active" if slide_index == 0 else ""
-            carousel_items_html += f"""
-            <div class="carousel-item {active}">
-                <video class="d-block w-100 rounded" controls>
-                    <source src="/static/uploads/{video_item}" type="video/mp4">
-                    Your browser does not support the video tag.
-                </video>
-            </div>
-            """
-
-        # Modal with carousel
-        photo_modals = f"""
-        {thumbnail_html}
-
-        <!-- Modal with Carousel -->
-        <div class="modal fade" id="carouselModal" tabindex="-1" aria-labelledby="carouselModalLabel" aria-hidden="true">
-          <div class="modal-dialog modal-dialog-centered modal-lg">
-            <div class="modal-content">
-              <div class="modal-body">
-                <div id="showcaseCarousel" class="carousel slide" data-bs-ride="carousel">
-                  <div class="carousel-inner">
-                    {carousel_items_html}
-                  </div>
-                  <button class="carousel-control-prev" type="button" data-bs-target="#showcaseCarousel" data-bs-slide="prev">
-                    <span class="carousel-control-prev-icon" aria-hidden="true"></span>
-                    <span class="visually-hidden">Previous</span>
-                  </button>
-                  <button class="carousel-control-next" type="button" data-bs-target="#showcaseCarousel" data-bs-slide="next">
-                    <span class="carousel-control-next-icon" aria-hidden="true"></span>
-                    <span class="visually-hidden">Next</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-        """
-    else:
-        photo_modals = "<p>No showcase items uploaded yet.</p>"
-
-    return f"""
-    <!doctype html>
-    <html lang="en">
-    <head>
-        <title>{user.name}'s Profile</title>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-        <style>
-            body {{
-                background-color: #f8f9fa;
-            }}
-            .profile-photo {{
-                 width: 150px;
-                height: 150px;
-                border-radius: 50%;
-                object-fit: cover;
-                object-position: center;
-            }}
-            .carousel-item img, .carousel-item video {{
-                max-height: 500px;
-                object-fit: contain;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="container-fluid mt-4">
-            <div class="row justify-content-center">
-                <div class="col-12 col-md-10 col-lg-8">
-                    <div class="text-center mb-3">
-                        <img src="{photo_url}" class="rounded-circle img-fluid profile-photo" alt="Profile Photo">
-                    </div>
-                    <div class="card p-3 shadow-sm">
-                        <h2 class="text-center mb-3">{user.name}'s Profile</h2>
-                        <p><strong>Gender:</strong> {gender}</p>
-                        <p><strong>Age:</strong> {worker_profile.age if worker_profile else ''}</p>
-                        <p><strong>About Me:</strong> {worker_profile.about if worker_profile else user.about}</p>
-                        <p><strong>Qualification:</strong> {worker_profile.qualification if worker_profile else ''}</p>
-                        <p><strong>Experience:</strong> {worker_profile.experience if worker_profile else ''}</p>
-
-                        <hr>
-                        <h4>Skills</h4>
-                        {skill_list}
-
-                        <hr>
-                        <h4>Showcase</h4>
-                        {photo_modals}
-
-                        <hr>
-                        {message}
-                        {book_button}
-
-                        <hr>
-                        {rating_form}
-
-                        <hr>
-                        {rating_display}
-
-                        <div class="text-center mt-4">
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </body>
-    </html>
-    """
 
 
 @app.route('/notifications')
 @login_required
 def notifications():
-    notes = Notification.query.filter_by(recipient_id=current_user.id).order_by(Notification.timestamp.desc()).all()
+    from datetime import datetime
+    notes = Notification.query.filter_by(
+        recipient_id=current_user.id
+    ).order_by(Notification.timestamp.desc()).all()
 
     html_notifications = ""
     for n in notes:
@@ -1094,6 +1090,7 @@ def notifications():
                     <p class="card-text">{n.message}</p>
         '''
 
+        # === JOB REQUEST ===
         if n.action_type == 'booking_request':
             html_notifications += f'''
                 <div class="d-flex gap-2 mt-2">
@@ -1101,14 +1098,40 @@ def notifications():
                     <button onclick="respondNotification({n.id}, 'Reject')" class="btn btn-danger btn-sm">Reject</button>
                 </div>
             '''
-        elif n.action_type == 'payment_required':
+
+        # === PAYMENT ===
+        elif n.action_type in ['payment_required', 'waiting_payment']:
             booking = Booking.query.get(n.booking_id)
             if booking:
-                html_notifications += f'''
-                    <form action="/pay_token/{booking.token}" method="get" class="d-flex gap-2 mt-2">
-                        <button type="submit" class="btn btn-warning btn-sm">💳 Pay Token Now</button>
-                    </form>
-                '''
+                now = datetime.utcnow()
+                is_worker = current_user.id == booking.worker_id
+                is_provider = current_user.id == booking.provider_id
+
+                if booking.status == 'Token Paid':
+                    html_notifications += f'''
+                        <div class="alert alert-success mt-2 p-2">
+                            ✅ Token paid by {booking.provider.name}. Job confirmed.
+                        </div>
+                    '''
+                elif booking.expires_at < now:
+                    html_notifications += f'''
+                        <div class="alert alert-danger mt-2 p-2">
+                            ❌ Token not received in time. Booking cancelled.
+                        </div>
+                    '''
+                else:
+                    if n.action_type == 'payment_required' and is_provider:
+                        html_notifications += f'''
+                            <form action="/pay_token/{booking.token}" method="get" class="d-flex gap-2 mt-2">
+                                <button type="submit" class="btn btn-warning btn-sm">💳 Pay Token Now</button>
+                            </form>
+                        '''
+                    elif n.action_type == 'waiting_payment' and is_worker:
+                        html_notifications += f'''
+                            <form action="/waiting_for_payment/{booking.token}" method="get" class="d-flex gap-2 mt-2">
+                                <button type="submit" class="btn btn-info btn-sm">⏳ Go to Waiting Page</button>
+                            </form>
+                        '''
 
         html_notifications += "</div></div>"  # close card-body and card
 
@@ -1155,10 +1178,8 @@ def notifications():
                 .then(res => res.json())
                 .then(data => {{
                     if (data.redirect) {{
-                        // Accept: redirect to waiting page
                         window.location.href = data.redirect;
                     }} else if (data.status === 'rejected') {{
-                        // Reject: just reload the page
                         location.reload();
                     }} else if (data.error) {{
                         alert("Error: " + data.error);
@@ -1175,11 +1196,9 @@ def notifications():
     '''
 
 
-
 @app.route('/check_pending_payment')
 @login_required
 def check_pending_payment():
-    from datetime import datetime
     booking = Booking.query.filter_by(
         provider_id=current_user.id,
         status='Accepted'
@@ -1188,10 +1207,6 @@ def check_pending_payment():
     if booking:
         return jsonify({"redirect_url": url_for('pay_token', token=booking.token)})
     return jsonify({"redirect_url": None})
-
-
-
-
 
 
 @app.route('/book_worker/<int:worker_id>', methods=['POST'])
@@ -1231,15 +1246,17 @@ def waiting_for_payment(token):
     return render_template("waiting_payment.html", booking=booking, remaining=remaining)
 
 
-
 @app.route('/respond_notification/<int:notification_id>', methods=['POST'])
 @login_required
 def respond_notification(notification_id):
     notif = Notification.query.get_or_404(notification_id)
+
     if notif.recipient_id != current_user.id:
         return jsonify({'error': 'Unauthorized'}), 403
 
+    # Handle both form and JSON requests
     response = request.form.get('response', '').capitalize() if not request.is_json else request.json.get('response', '').capitalize()
+
     if response not in ['Accept', 'Reject']:
         return jsonify({'error': 'Invalid response'}), 400
 
@@ -1249,21 +1266,54 @@ def respond_notification(notification_id):
 
     if response == 'Accept':
         booking.status = 'Accepted'
-        booking.expires_at = datetime.utcnow() + timedelta(minutes=10)
+        booking.expires_at = datetime.utcnow() + timedelta(minutes=5)
+
+        # Format duration
+        if booking.rate_type == "per hour":
+            hrs = int(booking.quantity)
+            mins = int((booking.quantity - hrs) * 60)
+            duration_str = f"{hrs} hr{'s' if hrs != 1 else ''} {mins} min{'s' if mins != 1 else ''}"
+        else:
+            unit = booking.rate_type.replace('per ', '')
+            duration_str = f"{booking.quantity} {unit}{'s' if booking.quantity > 1 else ''}"
+
+        # Update the original notification
         notif.message = f"You accepted {notif.sender.name}'s job request." if notif.sender else "You accepted a job request."
         notif.action_type = 'accepted'
         notif.is_read = True
 
+        # Notify the job giver to pay token
         if notif.sender_id:
-            notify_back = Notification(
+            notify_giver = Notification(
                 recipient_id=notif.sender_id,
                 sender_id=current_user.id,
                 job_id=notif.job_id,
                 booking_id=booking.id,
-                message=f"{current_user.name} has accepted your job request. Please pay the token within 10 minutes.",
+                message=(
+                    f"{current_user.name} has accepted your job request for <b>{duration_str}</b>. "
+                    f"Please pay the token within 5 minutes."
+                ),
                 action_type='payment_required'
             )
-            db.session.add(notify_back)
+            db.session.add(notify_giver)
+
+        # ✅ Notify the worker (optional)
+        existing_note = Notification.query.filter_by(
+            recipient_id=current_user.id,
+            booking_id=booking.id,
+            action_type='waiting_payment'
+        ).first()
+
+        if not existing_note:
+            notify_worker = Notification(
+                recipient_id=current_user.id,
+                sender_id=notif.sender_id,
+                job_id=notif.job_id,
+                booking_id=booking.id,
+                message=f"Waiting for {notif.sender.name} to pay the token.",
+                action_type='waiting_payment'
+            )
+            db.session.add(notify_worker)
 
         db.session.commit()
         return jsonify({'redirect': url_for('waiting_for_payment', token=booking.token)})
@@ -1274,6 +1324,7 @@ def respond_notification(notification_id):
         notif.action_type = 'rejected'
         notif.is_read = True
 
+        # Notify job giver about rejection
         if notif.sender_id:
             notify_back = Notification(
                 recipient_id=notif.sender_id,
@@ -1286,9 +1337,19 @@ def respond_notification(notification_id):
             db.session.add(notify_back)
 
         db.session.commit()
-        return jsonify({'status': 'rejected'})  # ✅ No redirect
+        return jsonify({'status': 'rejected'})  # No redirect
 
     return jsonify({'error': 'Unhandled case'}), 500
+
+@app.route('/check_token_status/<string:token>')
+@login_required
+def check_token_status(token):
+    booking = Booking.query.filter_by(token=token).first_or_404()
+
+    if current_user.id != booking.worker_id:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    return jsonify({"paid": booking.status == 'Token Paid'})
 
 
 
@@ -1300,18 +1361,222 @@ def pay_token(token):
     if current_user.id != booking.provider_id:
         return "Unauthorized", 403
 
-    total_amount = round(booking.rate * booking.quantity, 2)
+    provider = booking.provider
+    worker = booking.worker
 
-    if request.method == 'POST':
-        booking.status = 'Token Paid'
-        db.session.commit()
-        flash(f"Paid ₹{total_amount} successfully. Token on hold.")
+    # ❌ Prevent re-access after payment
+    if booking.status == 'Token Paid':
         return redirect(url_for('welcome'))
 
-    from datetime import datetime
-    remaining = max(0, int((booking.expires_at - datetime.utcnow()).total_seconds()))
-    return render_template("pay_token.html", booking=booking, time_left=remaining, total=total_amount)
+    # ❌ Cancel if expired
+    if booking.expires_at < datetime.utcnow():
+        booking.status = 'Cancelled'
+        db.session.commit()
+        return '''
+        <script>
+            alert("⛔ Token payment time expired. Booking cancelled.");
+            window.location.replace("/welcome");
+        </script>
+        '''
 
+    if booking.rate is None or booking.quantity is None:
+        return '''
+        <script>
+            alert("❌ Rate or quantity is missing for this booking.");
+            window.location.replace("/welcome");
+        </script>
+        '''
+
+    total_tokens = int(booking.rate * booking.quantity)
+
+    if request.method == 'POST':
+        if provider.tokens < total_tokens:
+            return '''
+            <script>
+                alert("❌ Insufficient tokens! You need {0}, but only have {1}.");
+                window.history.back();
+            </script>
+            '''.format(total_tokens, provider.tokens)
+
+        # ✅ Token Transfer
+        provider.tokens -= total_tokens
+        worker.tokens += total_tokens
+        booking.status = 'Token Paid'
+
+        notification = Notification(
+            recipient_id=worker.id,
+            sender_id=provider.id,
+            booking_id=booking.id,
+            message=f"✅ {provider.name} paid {total_tokens} tokens. You can now start chatting.",
+            action_type="payment_completed",
+            is_read=False
+        )
+        db.session.add(notification)
+        db.session.commit()
+
+        # ✅ Use JS + `replaceState` to kill history
+        return '''
+        <script>
+            alert("✅ Payment Successful.");
+            window.location.replace("/welcome");
+        </script>
+        '''
+
+    # ⏳ Remaining time
+    remaining = max(0, int((booking.expires_at - datetime.utcnow()).total_seconds()))
+
+    # ❌ Disable caching
+    response = make_response(
+        render_template("pay_token.html", booking=booking, time_left=remaining, total_tokens=total_tokens))
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
+
+
+from sqlalchemy.orm import joinedload
+
+@app.route('/get_booking_details', methods=['POST'])
+@login_required
+def get_booking_details():
+    user_id = current_user.id
+
+    booking = Booking.query.options(
+        joinedload(Booking.provider),
+        joinedload(Booking.worker)
+    ).filter(
+        Booking.status == 'Token Paid',
+        ((Booking.worker_id == user_id) | (Booking.provider_id == user_id))
+    ).first()
+
+    if not booking:
+        return jsonify({ "show": False })
+
+    is_giver = booking.provider_id == user_id
+    is_worker = booking.worker_id == user_id
+    name = booking.provider.name if is_worker else booking.worker.name
+    lat = booking.provider.latitude if is_worker else booking.worker.latitude
+    lon = booking.provider.longitude if is_worker else booking.worker.longitude
+
+    map_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}" if lat and lon else ""
+
+    # Generate OTP if not set
+    if is_giver and not booking.otp_code:
+        booking.otp_code = generate_otp()
+        db.session.commit()
+
+    # Calculate expiry time
+    otp_verified = booking.otp_verified
+    chat_active = False
+    time_left = None
+
+    if otp_verified and booking.otp_verified_time:
+        expiry_time = booking.otp_verified_time + timedelta(minutes=booking.job_duration_minutes or 0)
+        now = datetime.utcnow()
+        if now < expiry_time:
+            chat_active = True
+            time_left = int((expiry_time - now).total_seconds())  # send time left to frontend in seconds
+
+    return jsonify({
+        "show": True,
+        "giver_name": name,
+        "chat_url": url_for('chat', booking_id=booking.id),
+        "map_url": map_url,
+        "otp_code": booking.otp_code if is_giver else None,
+        "show_otp_input": is_worker and not booking.otp_verified,
+        "otp_verified": booking.otp_verified,
+        "chat_active": chat_active,
+        "time_left": time_left,
+        "debug": {
+            "is_worker": is_worker,
+            "otp_verified": booking.otp_verified,
+            "otp_verified_time": str(booking.otp_verified_time),
+            "job_duration_minutes": booking.job_duration_minutes,
+            "chat_expiry_time": str(booking.otp_verified_time + timedelta(minutes=booking.job_duration_minutes or 0)) if booking.otp_verified_time else None
+        }
+    })
+
+
+
+
+@app.route("/get_chat_status")
+@login_required
+def get_chat_status():
+    user_id = current_user.id
+
+    booking = Booking.query.filter(
+        ((Booking.worker_id == user_id) | (Booking.provider_id == user_id)) &
+        (Booking.status == "Token Paid")
+    ).first()
+
+    if not booking:
+        return jsonify({"show_chat_icon": False})
+
+    is_giver = booking.provider_id == user_id
+    is_worker = booking.worker_id == user_id
+    show_otp_input = is_worker and not booking.otp_verified
+
+    # ✅ Generate OTP if it's missing
+    if is_giver and not booking.otp_code:
+        booking.otp_code = generate_otp()
+        db.session.commit()
+
+    return jsonify({
+        "show_chat_icon": True,
+        "booking_id": booking.id,
+        "otp_code": booking.otp_code if is_giver else None,
+        "show_otp_input": show_otp_input,
+        "show_otp": is_giver and not booking.otp_verified
+    })
+
+
+
+@app.route('/verify_otp', methods=['POST'])
+@login_required
+def verify_otp():
+    user_id = current_user.id
+    data = request.get_json()
+    otp_input = data.get("otp")
+
+    booking = Booking.query.filter_by(worker_id=user_id, status="Token Paid").first()
+    if not booking or not booking.otp_code:
+        return jsonify({"success": False, "message": "No valid booking found."})
+
+    if otp_input == booking.otp_code:
+        booking.otp_verified = True
+        booking.otp_verified_time = datetime.utcnow()
+        db.session.commit()
+
+        # ✅ Calculate chat activation and time left here
+        duration = booking.job_duration_minutes or 0
+        expiry_time = booking.otp_verified_time + timedelta(minutes=duration)
+        now = datetime.utcnow()
+        time_left = int((expiry_time - now).total_seconds()) if now < expiry_time else 0
+
+        return jsonify({
+            "success": True,
+            "chat_active": time_left > 0,
+            "time_left": time_left
+        })
+    else:
+        return jsonify({"success": False, "message": "Invalid OTP."})
+
+
+
+
+def generate_otp():
+    return str(random.randint(100000, 999999))
+
+@app.route('/chat/<int:booking_id>')
+@login_required
+def chat(booking_id):
+    booking = Booking.query.get_or_404(booking_id)
+
+    # Only allow worker or provider involved in this booking
+    if current_user.id not in [booking.worker_id, booking.provider_id]:
+        abort(403)
+
+    return render_template('chat.html', booking=booking)
 
 
 
@@ -1512,6 +1777,7 @@ def seek_job():
     </body>
     </html>
     '''
+
 
 def generate_unique_worker_id():
     def is_valid(id_str):
@@ -1875,8 +2141,6 @@ def edit_worker_profile():
 
     skills = Skill.query.filter_by(user_id=current_user.id).all()
     return render_template('edit_worker_profile.html', profile=profile, skills=skills, showcase_images=showcase_images)
-
-
 
 
 @app.route('/delete_media/<media_type>/<media_id>', methods=['POST'])
