@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>🔒 Pay Token - JobConnect</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- Bootstrap -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <style>
+    body {
+      background: linear-gradient(to right, #f8f9fa, #e2e6ea);
+      font-family: 'Segoe UI', sans-serif;
+      padding: 30px;
+    }
+    .card {
+      max-width: 600px;
+      margin: auto;
+      border: none;
+      border-radius: 16px;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+    }
+    .card-header {
+      background: linear-gradient(to right, #007bff, #00c6ff);
+      color: white;
+      font-size: 20px;
+      font-weight: bold;
+      border-radius: 16px 16px 0 0;
+    }
+    .card-body p {
+      font-size: 16px;
+    }
+    .timer-box {
+      font-size: 24px;
+      font-weight: bold;
+      color: #28a745;
+      margin-top: 10px;
+      animation: pulse 1s infinite alternate;
+    }
+    @keyframes pulse {
+      0% { opacity: 1; transform: scale(1); }
+      100% { opacity: 0.7; transform: scale(1.05); }
+    }
+    .btn-pay {
+      font-size: 18px;
+      padding: 12px 30px;
+      border-radius: 8px;
+    }
+
+    /* Custom popup box */
+    .popup-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.4);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 9999;
+    }
+    .popup-box {
+      background: white;
+      padding: 30px;
+      border-radius: 10px;
+      max-width: 400px;
+      width: 90%;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
+      text-align: center;
+      font-size: 16px;
+    }
+    .popup-box h5 {
+      color: #dc3545;
+      font-weight: bold;
+    }
+    .popup-box button {
+      margin-top: 20px;
+      padding: 10px 20px;
+      border-radius: 6px;
+      background-color: #dc3545;
+      color: white;
+      border: none;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <div class="card-header text-center">
+      💳 Token Payment
+    </div>
+    <div class="card-body text-center">
+      <p class="mb-1">⏳ Please complete payment within:</p>
+      <div class="timer-box" id="timer">{{ time_left }}</div>
+
+      <hr class="my-4">
+
+      <p><strong>👷‍♂️ Skill:</strong> {{ booking.skill_name.title() }}</p>
+      <p><strong>💰 Rate:</strong> ₹{{ booking.rate }} / {{ booking.rate_type }}</p>
+      <p><strong>📦 Quantity:</strong> {{ booking.quantity }}</p>
+      <p><strong>🧾 Total:</strong> ₹{{ "%.2f"|format(booking.rate * booking.quantity) }}</p>
+      <p><strong>💼 Your Balance:</strong> {{ current_user.tokens }} tokens</p>
+
+      <!-- Hidden fields for JS check -->
+      <input type="hidden" id="user_tokens" value="{{ current_user.tokens }}">
+      <input type="hidden" id="total_tokens" value="{{ total_tokens }}">
+
+      <form id="payment-form" method="POST" class="mt-4">
+        <button type="submit" class="btn btn-primary btn-pay">💸 Pay ₹{{ "%.2f"|format(booking.rate * booking.quantity) }} Now</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Custom popup -->
+  <div class="popup-overlay" id="popup">
+    <div class="popup-box">
+      <h5>❌ Insufficient Tokens</h5>
+      <p>You need <span id="required-tokens"></span> tokens but have only <span id="available-tokens"></span>.</p>
+      <button onclick="closePopup()">Close</button>
+    </div>
+  </div>
+
+  <!-- Timer Script -->
+  <script>
+    let timeLeft = {{ time_left }};
+    const timerElement = document.getElementById("timer");
+
+    function formatTime(seconds) {
+      const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+      const s = (seconds % 60).toString().padStart(2, '0');
+      return `${m}:${s}`;
+    }
+
+    timerElement.textContent = formatTime(timeLeft);
+
+    const countdown = setInterval(() => {
+      if (timeLeft > 0) {
+        timeLeft--;
+        timerElement.textContent = formatTime(timeLeft);
+      } else {
+        clearInterval(countdown);
+        timerElement.textContent = "⛔ Time expired";
+        timerElement.style.color = "red";
+      }
+    }, 1000);
+
+    // Custom popup logic
+    const form = document.getElementById("payment-form");
+    const popup = document.getElementById("popup");
+
+    form.addEventListener("submit", function (e) {
+      const userTokens = parseInt(document.getElementById("user_tokens").value);
+      const totalTokens = parseInt(document.getElementById("total_tokens").value);
+
+      if (userTokens < totalTokens) {
+        e.preventDefault();
+        document.getElementById("required-tokens").textContent = totalTokens;
+        document.getElementById("available-tokens").textContent = userTokens;
+        popup.style.display = "flex";
+      }
+    });
+
+    function closePopup() {
+      popup.style.display = "none";
+    }
+  </script>
+
+</body>
+</html>

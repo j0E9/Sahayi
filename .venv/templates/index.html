@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Welcome</title>
+    <script>
+        async function getLocationAndSend() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    async function (position) {
+                        const lat = position.coords.latitude;
+                        const lon = position.coords.longitude;
+
+                        try {
+                            const response = await fetch("/get_location_details", {
+                                method: "POST",
+                                headers: {
+                                    "Content-Type": "application/json"
+                                },
+                                body: JSON.stringify({ latitude: lat, longitude: lon })
+                            });
+
+                            const data = await response.json();
+                            if (data.error) {
+                                document.getElementById("location-display").innerText = "Location fetch error";
+                                return;
+                            }
+
+                            const display = `${data.locality}, ${data.city}, ${data.state}, ${data.zipcode}`;
+                            document.getElementById("location-display").innerText = display;
+
+                            // Send location to update in DB
+                            await fetch("/update_location", {
+                                method: "POST",
+                                headers: {
+                                    "Content-Type": "application/json"
+                                },
+                                body: JSON.stringify(data)
+                            });
+                        } catch (err) {
+                            console.error("Location fetch error:", err);
+                            document.getElementById("location-display").innerText = "Error fetching location";
+                        }
+                    },
+                    function (error) {
+                        console.error("Geolocation error:", error);
+                        let errorMessage = "Permission denied or unavailable";
+                        switch (error.code) {
+                            case error.PERMISSION_DENIED:
+                                errorMessage = "User denied the request for Geolocation.";
+                                break;
+                            case error.POSITION_UNAVAILABLE:
+                                errorMessage = "Location information is unavailable.";
+                                break;
+                            case error.TIMEOUT:
+                                errorMessage = "The request to get user location timed out.";
+                                break;
+                            case error.UNKNOWN_ERROR:
+                                errorMessage = "An unknown error occurred.";
+                                break;
+                        }
+                        document.getElementById("location-display").innerText = errorMessage;
+                    }
+                );
+            } else {
+                document.getElementById("location-display").innerText = "Geolocation not supported by this browser.";
+            }
+        }
+
+        setInterval(getLocationAndSend, 10000);
+        window.onload = getLocationAndSend;
+    </script>
+</head>
+<body>
+    <div class="location-box">
+        📍 <b>Current Location:</b> <span id="location-display">Fetching...</span>
+    </div>
+</body>
+</html>

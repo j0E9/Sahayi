@@ -7,6 +7,7 @@ import random
 import secrets
 from datetime import datetime,timedelta
 import requests
+from sqlalchemy import Boolean
 from geopy.geocoders import Nominatim
 from werkzeug.utils import secure_filename
 from sqlalchemy import func
@@ -53,6 +54,12 @@ class User(UserMixin, db.Model):
     tokens = db.Column(db.Integer, default=5000)  # 🪙 Initial balance
     # Define the one-to-one relationship with WorkerProfile
     worker_profile = db.relationship('WorkerProfile', backref='user', uselist=False)
+
+
+    @property
+    def is_worker(self):
+        # Adjust this logic to your schema
+        return WorkerProfile.query.filter_by(user_id=self.id).first() is not None
 
 
 class Skill(db.Model):
@@ -103,6 +110,9 @@ class WorkerProfile(db.Model):
     photo = db.Column(db.String(200))   # store filename (e.g., "1_profile.jpg")
     video = db.Column(db.String(200))   # optional, for future use
     phone = db.Column(db.String(20))
+    is_online = db.Column(db.Boolean, default=False)
+    is_worker = db.Column(db.Boolean, default=False)  
+
 
 
 class Booking(db.Model):
@@ -115,6 +125,7 @@ class Booking(db.Model):
     rate = db.Column(db.Float)
     rate_type = db.Column(db.String(20))
     quantity = db.Column(db.Float)
+    completed_quantity = db.Column(db.Float, default=0)  # ✅ ✅ ✅ Added this line
     skill_name = db.Column(db.String(100))
     expires_at = db.Column(db.DateTime)
     job = db.relationship('Job', backref='bookings')
@@ -124,8 +135,21 @@ class Booking(db.Model):
     popup_shown_to_provider = db.Column(db.Boolean, default=False)
     otp_code = db.Column(db.String(6))
     otp_verified = db.Column(db.Boolean, default=False)
-    otp_verified_time = db.Column(db.DateTime)  # store when OTP was verified
-    job_duration_minutes = db.Column(db.Integer)  # or store it in seconds/hours
+    otp_verified_time = db.Column(db.DateTime)
+    job_duration_minutes = db.Column(db.Integer)
+    verify_completion_otp = db.Column(db.String(10), nullable=True)  # ✅ Add this
+    final_otp_code = db.Column(db.String(10), nullable=True)
+    final_otp_verified = db.Column(Boolean, default=False)
+    extra_timer_requested = db.Column(db.Boolean, default=False)
+    extra_otp_code = db.Column(db.String(6))
+    extra_otp_verified = db.Column(db.Boolean, default=False)
+    extra_timer_started_at = db.Column(db.DateTime)
+    extra_timer_stopped = db.Column(db.Boolean, default=False)
+    extra_timer_confirmed_stop = db.Column(db.Boolean, default=False)
+    extra_timer_requested_at = db.Column(db.DateTime, nullable=True)  # ✅ NEW
+    main_timer_paused = db.Column(db.Boolean, default=False)
+    extra_timer_stopped_by = db.Column(db.String(20))  # Values: 'worker' or 'provider'
+    extra_timer_payment_done = db.Column(db.Boolean, default=False)  # ✅ Payment status
 
 
 class Notification(db.Model):
@@ -148,7 +172,12 @@ class ShowcaseImage(db.Model):
     image_url = db.Column(db.String(255), nullable=False)
     uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-
+class Message(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    booking_id = db.Column(db.Integer, db.ForeignKey('booking.id'), nullable=False)
+    sender_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    text = db.Column(db.Text, nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
 @app.route('/upload_showcase', methods=['POST'])
 @login_required
@@ -709,13 +738,18 @@ def check_job_alert():
 @app.route('/welcome')
 @login_required
 def welcome():
+    unread_count = Notification.query.filter_by(
+        recipient_id=current_user.id, is_read=False
+    ).count()
 
-    unread_count = Notification.query.filter_by(recipient_id=current_user.id, is_read=False).count()
-    return render_template('welcome.html', unread_count=unread_count)
+    profile = WorkerProfile.query.filter_by(user_id=current_user.id).first()
 
-
-    return render_template("verify_otp.html")
-
+    return render_template(
+        'welcome.html',
+        unread_count=unread_count,
+        is_worker=profile.is_worker if profile else False,
+        is_online=profile.is_online if profile else False
+    )
 
 @app.route('/provide_job', methods=['GET', 'POST'])
 @login_required
@@ -747,6 +781,11 @@ def provide_job():
             if job_keywords & skill_words:
                 worker_user = User.query.get(skill.user_id)
                 if not worker_user or not worker_user.latitude or not worker_user.longitude:
+                    continue
+
+                # Only include workers who are online
+                worker_profile = WorkerProfile.query.filter_by(user_id=worker_user.id).first()
+                if not worker_profile or not worker_profile.is_online:
                     continue
 
                 distance_km = geodesic(
@@ -951,6 +990,13 @@ def confirm_booking(worker_id):
         selected_skill = skills[0]
 
     if request.method == 'POST':
+        # ✅ Check if worker is online before proceeding
+        if not worker.worker_profile or not worker.worker_profile.is_online:
+            return jsonify({
+                "error": "offline",
+                "message": "⚠️ This worker is currently offline and cannot accept bookings."
+            }), 400
+
         description = request.form['description']
         job_id = request.args.get("job_id")
         skill_id = int(request.form['skill_id'])
@@ -1255,7 +1301,11 @@ def respond_notification(notification_id):
         return jsonify({'error': 'Unauthorized'}), 403
 
     # Handle both form and JSON requests
-    response = request.form.get('response', '').capitalize() if not request.is_json else request.json.get('response', '').capitalize()
+    response = (
+        request.form.get('response', '').capitalize()
+        if not request.is_json
+        else request.json.get('response', '').capitalize()
+    )
 
     if response not in ['Accept', 'Reject']:
         return jsonify({'error': 'Invalid response'}), 400
@@ -1264,6 +1314,7 @@ def respond_notification(notification_id):
     if not booking or booking.status != 'Pending':
         return jsonify({'error': 'Invalid or already handled'}), 404
 
+    # ===================== ACCEPT =====================
     if response == 'Accept':
         booking.status = 'Accepted'
         booking.expires_at = datetime.utcnow() + timedelta(minutes=5)
@@ -1277,27 +1328,25 @@ def respond_notification(notification_id):
             unit = booking.rate_type.replace('per ', '')
             duration_str = f"{booking.quantity} {unit}{'s' if booking.quantity > 1 else ''}"
 
-        # Update the original notification
+        # ✅ Update the worker’s original notification
         notif.message = f"You accepted {notif.sender.name}'s job request." if notif.sender else "You accepted a job request."
         notif.action_type = 'accepted'
         notif.is_read = True
 
-        # Notify the job giver to pay token
+        # ✅ Notify the job giver to pay token
         if notif.sender_id:
             notify_giver = Notification(
                 recipient_id=notif.sender_id,
                 sender_id=current_user.id,
                 job_id=notif.job_id,
                 booking_id=booking.id,
-                message=(
-                    f"{current_user.name} has accepted your job request for <b>{duration_str}</b>. "
-                    f"Please pay the token within 5 minutes."
-                ),
+                message=(f"{current_user.name} has accepted your job request for <b>{duration_str}</b>. "
+                         f"Please pay the token within 5 minutes."),
                 action_type='payment_required'
             )
             db.session.add(notify_giver)
 
-        # ✅ Notify the worker (optional)
+        # ✅ Notify the worker (waiting status)
         existing_note = Notification.query.filter_by(
             recipient_id=current_user.id,
             booking_id=booking.id,
@@ -1315,16 +1364,51 @@ def respond_notification(notification_id):
             )
             db.session.add(notify_worker)
 
+        # ✅ Auto-reject all other pending bookings for this worker
+        other_bookings = Booking.query.filter(
+            Booking.worker_id == current_user.id,
+            Booking.id != booking.id,
+            Booking.status == 'Pending'
+        ).all()
+
+        for b in other_bookings:
+            b.status = 'Rejected'
+
+            # 👤 Worker’s perspective
+            worker_note = Notification(
+                recipient_id=current_user.id,
+                sender_id=b.provider_id,
+                job_id=b.job_id,
+                booking_id=b.id,
+                message=f"You rejected {b.provider.name}'s job request (auto-rejected because you accepted another job).",
+                action_type='rejected'
+            )
+            db.session.add(worker_note)
+
+            # 👤 Job giver’s perspective
+            giver_note = Notification(
+                recipient_id=b.provider_id,
+                sender_id=current_user.id,
+                job_id=b.job_id,
+                booking_id=b.id,
+                message=f"{current_user.name} has rejected your job request (auto-rejected because they accepted another job).",
+                action_type='rejected'
+            )
+            db.session.add(giver_note)
+
         db.session.commit()
         return jsonify({'redirect': url_for('waiting_for_payment', token=booking.token)})
 
+    # ===================== REJECT =====================
     elif response == 'Reject':
         booking.status = 'Rejected'
+
+        # 👤 Worker’s own notification
         notif.message = f"You rejected {notif.sender.name}'s job request." if notif.sender else "You rejected a job request."
         notif.action_type = 'rejected'
         notif.is_read = True
 
-        # Notify job giver about rejection
+        # 👤 Job giver’s notification
         if notif.sender_id:
             notify_back = Notification(
                 recipient_id=notif.sender_id,
@@ -1340,6 +1424,8 @@ def respond_notification(notification_id):
         return jsonify({'status': 'rejected'})  # No redirect
 
     return jsonify({'error': 'Unhandled case'}), 500
+
+
 
 @app.route('/check_token_status/<string:token>')
 @login_required
@@ -1435,6 +1521,7 @@ def pay_token(token):
 
 
 from sqlalchemy.orm import joinedload
+from datetime import datetime, timedelta
 
 @app.route('/get_booking_details', methods=['POST'])
 @login_required
@@ -1445,57 +1532,460 @@ def get_booking_details():
         joinedload(Booking.provider),
         joinedload(Booking.worker)
     ).filter(
-        Booking.status == 'Token Paid',
         ((Booking.worker_id == user_id) | (Booking.provider_id == user_id))
-    ).first()
+    ).order_by(Booking.id.desc()).first()
 
-    if not booking:
-        return jsonify({ "show": False })
+    # ⛔ No booking, completed booking, rejected, or payment not done → don't show chat
+    if (
+        not booking or
+        booking.status in ['Completed', 'Rejected', 'Cancelled', 'Pending'] or
+        not booking.status == 'Token Paid'  # Only show chat if payment is done
+    ):
+        return jsonify({
+            "show": False,
+            "message": "No active chat. Booking not accepted or payment not done."
+        })
 
     is_giver = booking.provider_id == user_id
     is_worker = booking.worker_id == user_id
     name = booking.provider.name if is_worker else booking.worker.name
     lat = booking.provider.latitude if is_worker else booking.worker.latitude
     lon = booking.provider.longitude if is_worker else booking.worker.longitude
-
     map_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}" if lat and lon else ""
 
-    # Generate OTP if not set
+    now = datetime.utcnow()
+    is_quantity_based = booking.rate_type in ['per job', 'per kilo', 'per kilometer']
+    is_hourly = booking.rate_type == 'per hour'
+
+    # ✅ Generate initial OTP to start the job
     if is_giver and not booking.otp_code:
         booking.otp_code = generate_otp()
         db.session.commit()
 
-    # Calculate expiry time
-    otp_verified = booking.otp_verified
-    chat_active = False
+    # ✅ Quantity-based jobs complete
+    if is_quantity_based and booking.completed_quantity >= booking.quantity:
+        if not booking.final_otp_code:
+            booking.final_otp_code = generate_otp()
+            db.session.commit()
+
+        if is_quantity_based and booking.completed_quantity >= booking.quantity:
+            if not booking.final_otp_code:
+                booking.final_otp_code = generate_otp()
+                db.session.commit()
+
+            # ✅ If OTP is already verified — job is truly done, clear chat
+            if booking.final_otp_verified:
+                return jsonify({
+                    "show": False,
+                    "message": "✅ Job completed and verified."
+                })
+
+            # ✅ Still waiting for OTP — keep chat active
+            return jsonify({
+                "show": True,  # Keep chat open until OTP verification
+                "booking_id": booking.id,
+                "completed_phase": True,
+                "giver_name": name,
+                "chat_url": url_for('chat', booking_id=booking.id),
+                "map_url": map_url,
+                "final_otp_code": booking.final_otp_code if is_worker else None,
+                "show_final_otp_input": is_giver and not booking.final_otp_verified,
+                "final_otp_verified": booking.final_otp_verified,
+                "rate_type": booking.rate_type,
+                "quantity": booking.quantity,
+                "completed_quantity": booking.completed_quantity,
+                "chat_active": True
+            })
+
+    # ✅ For hourly jobs
     time_left = None
+    if is_hourly and booking.otp_verified and booking.otp_verified_time:
+        duration_secs = (booking.quantity or 0) * 3600
+        expiry_time = booking.otp_verified_time + timedelta(seconds=duration_secs)
+        time_left = (expiry_time - now).total_seconds()
 
-    if otp_verified and booking.otp_verified_time:
-        expiry_time = booking.otp_verified_time + timedelta(minutes=booking.job_duration_minutes or 0)
-        now = datetime.utcnow()
-        if now < expiry_time:
-            chat_active = True
-            time_left = int((expiry_time - now).total_seconds())  # send time left to frontend in seconds
+        # ✅ Timer expired
+        if time_left <= 0:
+            # ✅ Grace: check if request was just made within last 15 seconds
+            grace_seconds = 15
+            recent_request = (
+                    booking.extra_timer_requested and
+                    booking.extra_timer_requested_at and
+                    (now - booking.extra_timer_requested_at).total_seconds() <= grace_seconds
+            )
 
+            if booking.extra_timer_requested or recent_request:
+                # ✅ Generate OTP if not already done
+                if not booking.extra_otp_code:
+                    booking.extra_otp_code = generate_otp()
+                    db.session.commit()
+
+                # ✅ Waiting for OTP verification
+                if not booking.extra_otp_verified:
+                    return jsonify({
+                        "show": True,
+                        "booking_id": booking.id,  # ✅ Always send booking_id
+                        "giver_name": name,
+                        "chat_url": url_for('chat', booking_id=booking.id),
+                        "map_url": map_url,
+                        "extra_otp_code": booking.extra_otp_code if is_giver else None,
+                        "show_extra_otp_input": is_worker,
+                        "extra_timer_pending": True,
+                        "chat_active": True,
+                        "time_left": 0,
+                        "message": "⏳ Waiting for Extra OTP verification."
+                    })
+
+                # ✅ OTP verified → Start timer if not started
+                if booking.extra_otp_verified and not booking.extra_timer_started_at:
+                    booking.extra_timer_started_at = datetime.utcnow()
+                    db.session.commit()
+
+
+                # ✅ Timer running
+                # ✅ Extra timer is running → never auto-expire
+                now = datetime.utcnow()
+                is_quantity_based = booking.rate_type in ['per job', 'per kilo', 'per kilometer']
+                is_hourly = booking.rate_type == 'per hour'
+
+                # ✅ Return early if extra timer is running
+                if booking.extra_timer_started_at and not booking.extra_timer_stopped:
+                    extra_elapsed = (now - booking.extra_timer_started_at).total_seconds()
+                    return jsonify({
+                        "show": True,
+                        "chat_active": True,
+                        "booking_id": booking.id,  # ✅ Always send booking_id
+                        "extra_timer_running": True,
+                        "extra_duration_seconds": extra_elapsed,
+                        "giver_name": name,
+                        "chat_url": url_for('chat', booking_id=booking.id),
+                        "map_url": map_url,
+                        "stop_confirmed": booking.extra_timer_confirmed_stop,
+                        "show_stop_button": is_worker
+                    })
+
+                # ✅ Timer stopped
+                return jsonify({
+                    "show": True,
+                    "chat_active": False,
+                    "extra_timer_stopped": True,
+                    "booking_id": booking.id,
+                    "show_confirm_stop_button": (
+                    (is_worker and booking.extra_timer_stopped_by == 'provider') or
+                    (is_giver and booking.extra_timer_stopped_by == 'worker')) and not booking.extra_timer_confirmed_stop,
+                    "giver_name": name
+                })
+
+            # ❌ No extra timer requested — chat expired
+            return jsonify({
+                "show": False,
+                "message": "⛔ Chat expired. No extra time was requested."
+            })
+
+
+        # ✅ Less than 10 minutes left → allow extra time button
+        elif time_left < 600 and not booking.extra_timer_requested:
+            return jsonify({
+                "show": True,
+                "show_extra_timer_button": is_worker,
+                "chat_url": url_for('chat', booking_id=booking.id),
+                "map_url": map_url,
+                "giver_name": name,
+                "booking_id": booking.id,  # ✅ Always send booking_id
+                "rate_type": booking.rate_type,
+                "quantity": booking.quantity,
+                "completed_quantity": booking.completed_quantity,
+                "otp_code": booking.otp_code if is_giver else None,
+                "show_otp_input": is_worker and not booking.otp_verified,
+                "otp_verified": booking.otp_verified,
+                "chat_active": True,
+                "time_left": time_left
+            })
+
+    # ✅ Final fallback response (chat still valid or not hourly)
     return jsonify({
         "show": True,
         "giver_name": name,
+        "booking_id": booking.id,  # ✅ Always send booking_id
         "chat_url": url_for('chat', booking_id=booking.id),
         "map_url": map_url,
         "otp_code": booking.otp_code if is_giver else None,
         "show_otp_input": is_worker and not booking.otp_verified,
         "otp_verified": booking.otp_verified,
-        "chat_active": chat_active,
-        "time_left": time_left,
+        "chat_active": True,
+        "time_left": time_left if is_hourly else None,
+        "rate_type": booking.rate_type,
+        "quantity": booking.quantity or 0,
+        "completed_quantity": booking.completed_quantity or 0,
         "debug": {
             "is_worker": is_worker,
-            "otp_verified": booking.otp_verified,
-            "otp_verified_time": str(booking.otp_verified_time),
-            "job_duration_minutes": booking.job_duration_minutes,
-            "chat_expiry_time": str(booking.otp_verified_time + timedelta(minutes=booking.job_duration_minutes or 0)) if booking.otp_verified_time else None
+            "is_giver": is_giver
         }
     })
 
+
+@app.route('/request_extra_time', methods=['POST'])
+@login_required
+def request_extra_time():
+    user_id = current_user.id
+
+    booking = Booking.query.filter(
+        Booking.status == 'Token Paid',
+        Booking.worker_id == user_id
+    ).order_by(Booking.id.desc()).first()
+
+    if not booking:
+        return jsonify({"success": False, "message": "No active booking."})
+
+    if booking.extra_timer_requested:
+        return jsonify({"success": False, "message": "Already requested."})
+
+    booking.extra_timer_requested = True
+    booking.extra_timer_requested_at = datetime.utcnow()
+    booking.main_timer_paused = True  # ✅ Pause the main timer
+    db.session.commit()
+
+    return jsonify({"success": True})
+
+
+
+@app.route('/verify_extra_timer_otp', methods=['POST'])
+@login_required
+def verify_extra_timer_otp():
+    data = request.json
+    otp = data.get("otp")
+    user_id = current_user.id
+
+    booking = Booking.query.filter(
+        Booking.status == 'Token Paid',
+        Booking.worker_id == user_id
+    ).order_by(Booking.id.desc()).first()
+
+    if not booking or not otp:
+        return jsonify({"success": False, "message": "Invalid request."})
+
+    if booking.extra_otp_code == otp:
+        booking.extra_otp_verified = True
+        booking.extra_timer_started_at = datetime.utcnow()
+        booking.main_timer_paused = False
+        db.session.commit()
+        return jsonify({"success": True})
+
+    else:
+        return jsonify({"success": False, "message": "Incorrect OTP."})
+
+
+@app.route('/start_extra_timer', methods=['POST'])
+@login_required
+def start_extra_timer():
+    booking = get_active_booking(current_user.id)
+    if not booking:
+        return jsonify({"success": False, "message": "No booking found."})
+    if not booking.extra_otp_verified:
+        return jsonify({"success": False, "message": "OTP not verified yet."})
+    if booking.extra_timer_started_at:
+        return jsonify({"success": True, "message": "Already started."})
+
+    booking.extra_timer_started_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"success": True})
+
+def get_active_booking(user_id):
+    return Booking.query.filter(
+        Booking.status == 'Token Paid',
+        ((Booking.worker_id == user_id) | (Booking.provider_id == user_id))
+    ).order_by(Booking.id.desc()).first()
+
+@app.route('/stop_extra_timer', methods=['POST'])
+@login_required
+def stop_extra_timer():
+    booking = get_active_booking(current_user.id)
+    if not booking or not booking.extra_timer_started_at or booking.extra_timer_stopped:
+        return jsonify({"success": False})
+
+    # Track who stopped
+    if current_user.id == booking.worker_id:
+        booking.extra_timer_stopped_by = 'worker'
+    elif current_user.id == booking.provider_id:
+        booking.extra_timer_stopped_by = 'provider'
+
+    booking.extra_timer_stopped = True
+    db.session.commit()
+    return jsonify({"success": True})
+
+
+
+@app.route('/confirm_stop_extra_timer', methods=['POST'])
+@login_required
+def confirm_stop_extra_timer():
+    booking = get_active_booking(current_user.id)
+    if not booking or not booking.extra_timer_stopped:
+        return jsonify({"success": False})
+
+    # Calculate duration worked in extra time
+    extra_duration_seconds = (datetime.utcnow() - booking.extra_timer_started_at).total_seconds()
+    extra_hours = extra_duration_seconds / 3600
+    rate = booking.rate or 0
+
+    # Calculate amount due
+    amount_due = round(rate * extra_hours, 2)
+
+    booking.extra_timer_confirmed_stop = True
+    db.session.commit()
+
+    return jsonify({
+        "success": True,
+        "redirect_url": url_for('pay_extra_amount', booking_id=booking.id, amount=amount_due)
+    })
+
+
+@app.route('/pay_extra_amount/<int:booking_id>/<float:amount>', methods=['GET', 'POST'])
+@login_required
+def pay_extra_amount(booking_id, amount):
+    booking = Booking.query.get_or_404(booking_id)
+    provider = booking.provider
+    worker = booking.worker
+
+    if current_user.id != provider.id:
+        return "Unauthorized", 403
+
+    # ✅ Calculate extra_hours based on timer start
+    extra_hours = None
+    if booking.extra_timer_started_at:
+        extra_duration_seconds = (datetime.utcnow() - booking.extra_timer_started_at).total_seconds()
+        extra_hours = extra_duration_seconds / 3600
+    else:
+        # Fallback: use amount / rate
+        extra_hours = amount / booking.rate if booking.rate else 0
+
+    if request.method == 'POST':
+        if provider.tokens < amount:
+            return "<script>alert('❌ Not enough tokens'); window.history.back();</script>"
+
+        provider.tokens -= int(amount)
+        worker.tokens += int(amount)
+
+        # Mark booking as fully completed and chat expired
+        booking.status = 'Completed'
+        booking.chat_expired = True  # Add this field if you want strict expiration
+        db.session.commit()
+
+        return redirect(url_for('welcome'))
+
+    return render_template(
+        "pay_extra_amount.html",
+        amount=amount,
+        booking=booking,
+        extra_hours=extra_hours  # ✅ Pass it to template
+    )
+
+
+# -------------------------
+# Send a message
+# -------------------------
+@app.route("/send_message", methods=["POST"])
+@login_required
+def send_message():
+    data = request.get_json()
+    print("send_message received data:", data)
+
+    text = data.get("message")
+    booking_id = data.get("booking_id")
+    print(f"Extracted text: '{text}', booking_id: {booking_id}, type: {type(booking_id)}")
+
+    if not text:
+        print("No text provided")
+        return jsonify({"status": "error", "message": "No message text"}), 400
+    if not booking_id:
+        print("No booking_id provided or invalid")
+        return jsonify({"status": "error", "message": "No booking_id"}), 400
+
+    try:
+        msg = Message(
+            booking_id=booking_id,
+            sender_id=current_user.id,
+            text=text
+        )
+        db.session.add(msg)
+        db.session.commit()
+        print(f"Message saved successfully for booking_id: {booking_id}")
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        print(f"Error saving message: {e}")
+        return jsonify({"status": "error", "message": "Internal server error"}), 500
+
+
+
+
+
+# -------------------------
+# Get messages
+# -------------------------
+@app.route("/get_messages/<int:booking_id>", methods=["GET"])
+@login_required
+def get_messages(booking_id):
+    msgs = (
+        Message.query
+        .filter_by(booking_id=booking_id)
+        .order_by(Message.timestamp.asc())
+        .all()
+    )
+    return jsonify([
+        {
+            "sender_id": m.sender_id,
+            "text": m.text,
+            "timestamp": m.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        }
+        for m in msgs
+    ])
+
+
+@app.route('/update_completed_quantity', methods=['POST'])
+@login_required
+def update_completed_quantity():
+    data = request.get_json()
+    completed = int(data.get('completed_quantity', 0))
+
+    booking = Booking.query.filter_by(
+        status='Token Paid',
+        worker_id=current_user.id
+    ).order_by(Booking.id.desc()).first()
+
+    if not booking:
+        return jsonify({ "success": False, "message": "No active booking." })
+
+    if completed > booking.quantity:
+        return jsonify({ "success": False, "message": "Cannot exceed total quantity." })
+
+    booking.completed_quantity = completed
+
+    # ✅ Generate OTP when quantity is complete
+    if completed == booking.quantity and not booking.verify_completion_otp:
+        booking.verify_completion_otp = generate_otp()
+
+    db.session.commit()
+    return jsonify({
+        "success": True,
+        "otp_generated": completed == booking.quantity,
+        "otp": booking.verify_completion_otp
+    })
+
+@app.route('/verify_final_otp', methods=['POST'])
+@login_required
+def verify_final_otp():
+    data = request.get_json()
+    otp = data.get('otp')
+    user_id = current_user.id
+
+    booking = Booking.query.filter_by(provider_id=user_id, status='Token Paid').order_by(Booking.id.desc()).first()
+    if not booking:
+        return jsonify({"success": False, "message": "Booking not found."})
+
+    if booking.final_otp_code == otp:
+        booking.final_otp_verified = True
+        db.session.commit()
+        return jsonify({"success": True})
+    return jsonify({"success": False, "message": "Invalid OTP."})
 
 
 
@@ -1530,7 +2020,6 @@ def get_chat_status():
     })
 
 
-
 @app.route('/verify_otp', methods=['POST'])
 @login_required
 def verify_otp():
@@ -1538,16 +2027,19 @@ def verify_otp():
     data = request.get_json()
     otp_input = data.get("otp")
 
-    booking = Booking.query.filter_by(worker_id=user_id, status="Token Paid").first()
+    # ✅ FIX: get the most recent booking
+    booking = Booking.query.filter_by(worker_id=user_id, status="Token Paid") \
+        .order_by(Booking.id.desc()).first()
+
     if not booking or not booking.otp_code:
         return jsonify({"success": False, "message": "No valid booking found."})
 
-    if otp_input == booking.otp_code:
+    if otp_input == booking.otp_code and not booking.otp_verified:
         booking.otp_verified = True
         booking.otp_verified_time = datetime.utcnow()
         db.session.commit()
 
-        # ✅ Calculate chat activation and time left here
+        # ✅ Calculate chat activation and time left
         duration = booking.job_duration_minutes or 0
         expiry_time = booking.otp_verified_time + timedelta(minutes=duration)
         now = datetime.utcnow()
@@ -1558,8 +2050,8 @@ def verify_otp():
             "chat_active": time_left > 0,
             "time_left": time_left
         })
-    else:
-        return jsonify({"success": False, "message": "Invalid OTP."})
+
+    return jsonify({"success": False, "message": "Invalid OTP."})
 
 
 
@@ -1578,6 +2070,18 @@ def chat(booking_id):
 
     return render_template('chat.html', booking=booking)
 
+@app.route('/update_worker_status', methods=['POST'])
+@login_required
+def update_worker_status():
+    user_id = current_user.id
+    data = request.get_json()
+    is_online = data.get('online', False)
+    profile = WorkerProfile.query.filter_by(user_id=user_id).first()
+    if not profile:
+        return jsonify({'success': False, 'message': 'Profile not found'}), 404
+    profile.is_online = is_online
+    db.session.commit()
+    return jsonify({'success': True, 'is_online': is_online})
 
 
 @app.route('/seek_job')
@@ -1650,6 +2154,7 @@ def seek_job():
                   <div class="carousel-inner">
                     {carousel_items_html}
                   </div>
+                 
                   <button class="carousel-control-prev" type="button" data-bs-target="#showcaseCarousel" data-bs-slide="prev">
                     <span class="carousel-control-prev-icon" aria-hidden="true"></span>
                     <span class="visually-hidden">Previous</span>

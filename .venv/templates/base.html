@@ -1,0 +1,51 @@
+<style>
+  #paid-job-btn {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: #28a745;
+    color: white;
+    font-size: 24px;
+    padding: 14px;
+    border-radius: 50%;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+    cursor: grab;
+    z-index: 2000;
+    display: none;
+  }
+</style>
+<div id="paid-job-btn">💼</div>
+
+<script>
+let paidBtn = document.getElementById('paid-job-btn'),
+    dragging = false, offsetX = 0, offsetY = 0;
+
+paidBtn.addEventListener('mousedown', e => {
+  dragging = true;
+  offsetX = e.clientX - paidBtn.offsetLeft;
+  offsetY = e.clientY - paidBtn.offsetTop;
+});
+document.addEventListener('mousemove', e => {
+  if (dragging) {
+    paidBtn.style.left = (e.clientX - offsetX) + 'px';
+    paidBtn.style.top = (e.clientY - offsetY) + 'px';
+  }
+});
+document.addEventListener('mouseup', () => dragging = false);
+
+paidBtn.onclick = () => {
+  window.location.href = '/chat/' + paidBtn.dataset.booking;
+};
+
+async function pollPaidJobs() {
+  let res = await fetch('/check_paid_jobs'),
+      data = await res.json();
+
+  if (data.has_paid) {
+    paidBtn.style.display = 'block';
+    paidBtn.dataset.booking = data.booking_id;
+  }
+}
+setInterval(pollPaidJobs, 5000);
+pollPaidJobs();
+</script>

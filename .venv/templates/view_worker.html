@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ user.name }}'s Profile</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .profile-photo {
+      width: 150px;
+      height: 150px;
+      border-radius: 50%;
+      object-fit: cover;
+    }
+    .skill-badge { margin: 2px; }
+    .carousel-item img, .carousel-item video {
+      max-height: 500px;
+      object-fit: contain;
+    }
+  </style>
+</head>
+<body class="bg-light">
+
+<div class="container py-4">
+
+  <!-- Profile Card -->
+  <div class="card mb-4 shadow-sm">
+    <div class="row g-0 align-items-center">
+      <div class="col-md-3 text-center p-3">
+        <img src="{{ url_for('static', filename='uploads/' ~ profile.photo) if profile and profile.photo else url_for('static', filename='default_profile.jpg') }}" class="profile-photo img-fluid">
+      </div>
+      <div class="col-md-9 p-3">
+        <h2>{{ user.name }}</h2>
+        <p><strong>Age:</strong> {{ worker_profile.age or 'N/A' }} | <strong>Gender:</strong> {{ worker_profile.gender or 'N/A' }}</p>
+        <p><strong>About:</strong> {{ worker_profile.about or user.about or 'Not provided.' }}</p>
+        <p><strong>Experience:</strong> {{ worker_profile.experience or 'N/A' }}</p>
+        <p><strong>Qualification:</strong> {{ worker_profile.qualification or 'N/A' }}</p>
+
+        <div class="mb-2">
+          <strong>Skills:</strong><br>
+          {% for s in skills %}
+            <span class="badge bg-primary skill-badge">{{ s.name.title() }} (₹{{ s.rate }} / {{ s.rate_type }})</span>
+          {% endfor %}
+        </div>
+
+        {% if current_user.id != user.id and job_id %}
+          <a href="{{ url_for('confirm_booking', worker_id=user.id) }}?job_id={{ job_id }}&skill_id={{ selected_skill.id }}" class="btn btn-success mt-2">📘 Book Sahayi</a>
+        {% elif current_user.id == user.id %}
+          <div class="alert alert-info mt-2">You cannot book your own profile.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Showcase Section -->
+  <div class="card shadow-sm mb-4 p-3">
+    <h5 class="mb-3">Showcase</h5>
+    <div class="row">
+      {% for img in showcase_images %}
+        <div class="col-4 mb-2">
+          <img src="{{ url_for('static', filename='uploads/' ~ img.image_url) }}"
+               class="img-thumbnail w-100" data-bs-toggle="modal" data-bs-target="#modal{{ loop.index }}">
+        </div>
+
+        <!-- Image Modal -->
+        <div class="modal fade" id="modal{{ loop.index }}" tabindex="-1">
+          <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+              <img src="{{ url_for('static', filename='uploads/' ~ img.image_url) }}" class="img-fluid">
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+
+      {% if worker_profile.video %}
+        <div class="col-12 mt-3">
+          <video controls class="w-100 rounded shadow">
+            <source src="{{ url_for('static', filename='uploads/' ~ worker_profile.video) }}" type="video/mp4">
+          </video>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Ratings Section -->
+  <div class="card shadow-sm mb-4 p-3">
+    <h5>Ratings & Reviews</h5>
+    <p><strong>Average:</strong> {{ avg_rating }}</p>
+    <ul class="list-group mb-3">
+      {% for r in ratings %}
+        <li class="list-group-item">
+          <b>{{ r.stars }} ★</b> from <i>{{ r.rater.name }}</i>: {{ r.comment }}
+        </li>
+      {% endfor %}
+    </ul>
+
+    {% if current_user.id != user.id %}
+      <!-- Trigger Button -->
+      <button class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#ratingModal">
+        Leave a Rating
+      </button>
+    {% endif %}
+  </div>
+
+</div>
+
+<!-- Rating Modal -->
+<div class="modal fade" id="ratingModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content p-3">
+      <form method="POST">
+        <div class="mb-3">
+          <label>Stars (0.5 to 5)</label>
+          <input type="number" name="stars" min="0.5" max="5" step="0.5" class="form-control" required>
+        </div>
+        <div class="mb-3">
+          <label>Comment</label>
+          <textarea name="comment" class="form-control" required></textarea>
+        </div>
+        <button type="submit" class="btn btn-primary w-100">Submit</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
